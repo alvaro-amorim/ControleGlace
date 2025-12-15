@@ -1,13 +1,34 @@
 import Head from 'next/head';
 import Link from 'next/link';
+import { useRouter } from 'next/router'; // Importação nova para redirecionar
 import { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 
 export default function Home() {
+  const router = useRouter(); // Hook de navegação
   const [insight, setInsight] = useState('');
   const [loading, setLoading] = useState(true);
+  const [userName, setUserName] = useState(''); // Para mostrar o nome se quiser
 
   useEffect(() => {
+    // --- 🔒 LÓGICA DE SEGURANÇA ---
+    const token = localStorage.getItem('token');
+    const user = localStorage.getItem('user');
+
+    if (!token) {
+      // Se não tem token, redireciona imediatamente para o login
+      router.push('/login');
+      return; 
+    }
+
+    if (user) {
+        try {
+            const userData = JSON.parse(user);
+            setUserName(userData.name || '');
+        } catch (e) {}
+    }
+
+    // Só busca os dados da IA se estiver logado
     fetch('/api/ai/insight')
       .then(res => res.json())
       .then(data => {
@@ -15,7 +36,19 @@ export default function Home() {
         setLoading(false);
       })
       .catch(() => setLoading(false));
-  }, []);
+  }, [router]);
+
+  // --- FUNÇÃO DE LOGOUT ---
+  const handleLogout = () => {
+    localStorage.removeItem('token'); // Apaga a chave
+    localStorage.removeItem('user');  // Apaga os dados
+    router.push('/login'); // Manda pro login
+  };
+
+  // Enquanto verifica o login, mostra um carregando simples para não piscar a tela
+  if (loading && !insight) { 
+      return <div className="min-h-screen flex items-center justify-center bg-glace-cream text-glace-wine font-bold">Verificando acesso...</div>;
+  }
 
   return (
     <div className="min-h-screen relative font-sans text-gray-800">
@@ -52,7 +85,7 @@ export default function Home() {
                         Glacê
                     </h1>
                     <p className="text-glace-gold font-medium tracking-widest text-sm uppercase mt-1">
-                        Alta Confeitaria & Gestão
+                        Olá, {userName || 'Confeiteira'}! 👋
                     </p>
                 </div>
             </div>
@@ -63,10 +96,13 @@ export default function Home() {
                         📅 {new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}
                     </p>
                 </div>
-                {/* BOTÃO DE SAIR NOVO */}
-                <Link href="/login" className="text-xs font-bold text-gray-400 hover:text-red-600 transition flex items-center gap-1">
+                {/* BOTÃO DE SAIR AGORA FUNCIONAL */}
+                <button 
+                    onClick={handleLogout} 
+                    className="text-xs font-bold text-gray-400 hover:text-red-600 transition flex items-center gap-1 cursor-pointer"
+                >
                     Sair do Sistema <span>🚪</span>
-                </Link>
+                </button>
             </div>
         </header>
 
