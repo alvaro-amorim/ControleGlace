@@ -1,15 +1,12 @@
-import mongoose, { Schema, model, models } from 'mongoose';
+import mongoose, { Schema } from 'mongoose';
 
 const UserSchema = new Schema({
   name: { type: String, required: true },
   email: { type: String, required: true, unique: true },
-  passwordHash: { type: String, required: true },
-  role: { type: String, enum: ['admin', 'staff'], default: 'staff' },
-  createdAt: { type: Date, default: Date.now },
-  lastLoginAt: { type: Date },
+  password: { type: String, required: true }, // Em produção real, usaríamos hash (bcrypt)
 });
 
-// Se o modelo já existir (hot reload), usa o existente. Se não, cria um novo.
-const User = models.User || model('User', UserSchema);
+// Evita recriar o modelo se já existir
+const User = mongoose.models.User || mongoose.model('User', UserSchema);
 
 export default User;
