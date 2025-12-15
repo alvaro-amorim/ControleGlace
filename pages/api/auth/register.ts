@@ -1,46 +1,44 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import bcrypt from 'bcryptjs';
 import dbConnect from '../../../lib/db/mongoose';
 import User from '../../../lib/db/models/User';
 
+const MASTER_CODE = '104298'; // 🔒 Sua senha geral
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // 1. Apenas aceita método POST
-  if (req.method !== 'POST') {
-    return res.status(405).json({ message: 'Método não permitido' });
+  if (req.method !== 'POST') return res.status(405).end();
+
+  const { name, email, password, securityCode } = req.body;
+
+  // 1. Verifica o Código Mestre
+  if (securityCode !== MASTER_CODE) {
+      return res.status(403).json({ success: false, message: '⛔ Código de Segurança (Master) incorreto!' });
+  }
+
+  if (!name || !email || !password) {
+      return res.status(400).json({ success: false, message: 'Preencha todos os campos.' });
   }
 
   try {
-    // 2. Conecta ao banco
     await dbConnect();
 
-    const { name, email, password } = req.body;
-
-    // 3. Validação básica
-    if (!name || !email || !password) {
-      return res.status(400).json({ message: 'Preencha todos os campos.' });
+    // 2. Verifica se email já existe
+    const existing = await User.findOne({ email });
+    if (existing) {
+        return res.status(400).json({ success: false, message: 'Este email já possui cadastro.' });
     }
 
-    // 4. Verifica se usuário já existe
-    const userExists = await User.findOne({ email });
-    if (userExists) {
-      return res.status(400).json({ message: 'Este e-mail já está cadastrado.' });
-    }
-
-    // 5. Criptografa a senha (Hash)
-    const salt = await bcrypt.genSalt(10);
-    const passwordHash = await bcrypt.hash(password, salt);
-
-    // 6. Cria o usuário (se for o primeiro do sistema, poderia ser admin, mas vamos fixar staff por enquanto)
-    const newUser = await User.create({
-      name,
-      email,
-      passwordHash,
-      role: 'staff', // Padrão
+    // 3. Cria o usuário
+    // Nota: Para facilitar seu acesso hoje, estamos salvando a senha simples.
+    // Futuramente, podemos ativar a criptografia (bcrypt) aqui.
+    await User.create({
+        name,
+        email,
+        password
     });
 
-    res.status(201).json({ message: 'Usuário criado com sucesso!', userId: newUser._id });
+    res.status(201).json({ success: true, message: '✅ Usuário criado com sucesso!' });
+
   } catch (error: any) {
-    console.error(error);
-    res.status(500).json({ message: 'Erro ao registrar usuário', error: error.message });
+    res.status(500).json({ success: false, error: error.message });
   }
 }
