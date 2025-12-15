@@ -1,27 +1,41 @@
-import mongoose, { Schema, model, models } from 'mongoose';
+import mongoose, { Document, Schema } from 'mongoose';
 
-const OrderSchema = new Schema({
-  orderNumber: { type: String, required: true },
+export interface IOrder extends Document {
+  orderDate: Date;           // Data de Entrada (NOVO)
+  customerName: string;
+  deliveryDate: Date;
+  description: string;
+  totalValue: number;
+  paymentStatus: 'Pendente' | 'Sinal 50% Pago' | 'Pago Integral';
+  status: 'Pendente' | 'Em Produção' | 'Pronto' | 'Entregue' | 'Cancelado';
+  deliveryMethod: 'Retirada' | 'Entrega';
+  address: string;
+  contact: string;
+  observation: string;
+}
+
+const OrderSchema: Schema = new Schema({
+  orderDate: { type: Date, default: Date.now }, // Preenche automático
   customerName: { type: String, required: true },
-  items: [
-    {
-      name: { type: String, required: true },
-      qty: { type: Number, default: 1 },
-      price: { type: Number, default: 0 }
-    }
-  ],
-  totalValue: { type: Number, required: true },
-  deliveryDate: { type: String, required: true }, // Mudamos para String (YYYY-MM-DD) para evitar fuso horário
-  status: { type: String, default: 'pendente' }, // pendente, producao, entregue, cancelado
-  
-  // --- NOVOS CAMPOS ---
-  deliveryType: { type: String, default: 'Retirada' }, // Retirada ou Entrega
-  paymentStatus: { type: String, default: 'Pendente' }, // Pendente, Pago, Parcial
-  observation: { type: String, default: '' }, // Alergias, Endereço, Detalhes
-  
-  createdAt: { type: Date, default: Date.now },
+  deliveryDate: { type: Date, required: true },
+  description: { type: String, required: true },
+  totalValue: { type: Number, required: true, default: 0 },
+  paymentStatus: { 
+    type: String, 
+    enum: ['Pendente', 'Sinal 50% Pago', 'Pago Integral'], 
+    default: 'Pendente' 
+  },
+  status: { 
+    type: String, 
+    enum: ['Pendente', 'Em Produção', 'Pronto', 'Entregue', 'Cancelado'], 
+    default: 'Pendente' 
+  },
+  deliveryMethod: { type: String, enum: ['Retirada', 'Entrega'], default: 'Retirada' },
+  address: { type: String },
+  contact: { type: String },
+  observation: { type: String }
 });
 
-const Order = models.Order || model('Order', OrderSchema);
+const Order = mongoose.models.Order || mongoose.model<IOrder>('Order', OrderSchema);
 
 export default Order;

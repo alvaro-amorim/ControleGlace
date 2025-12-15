@@ -2,40 +2,49 @@ import { useEffect, useState, useRef } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 
-// Definição dos tipos
+// Tipagem baseada na sua planilha
 interface Transaction {
   _id: string;
-  type: 'entrada' | 'saida';
-  amount: number;
+  date: string;
+  type: 'Receita' | 'Despesa';
   category: string;
   description: string;
-  date: string;
+  amount: number;
   paymentMethod: string;
-  status: 'pago' | 'pendente';
-  attachment?: string;
-  costCenter?: string;
-  payee?: string;
-  dueDate?: string;
-  observation?: string;
+  costCenter: string;
+  beneficiary: string;
+  status: 'Pago' | 'Pendente' | 'Agendado';
+  observation: string;
+  paymentDate: string;
+  receiptImage: string;
 }
+
+const CATEGORIES_RECEITA = ['Vendas Loja', 'Encomendas', 'iFood', 'Aportes'];
+const CATEGORIES_DESPESA = ['Insumos', 'Embalagens', 'Limpeza', 'Aluguel', 'Energia', 'Água', 'Salários', 'Impostos', 'Marketing', 'Manutenção'];
+const PAYMENT_METHODS = ['Pix', 'Cartão Crédito', 'Cartão Débito', 'Dinheiro', 'Transferência', 'Boleto'];
+const COST_CENTERS = ['Loja Física', 'Produção', 'Administrativo', 'Delivery'];
 
 export default function FinancePage() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [showCamera, setShowCamera] = useState(false);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  
+  // Estado para Drag & Drop
+  const [dragActive, setDragActive] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   // Estado do Formulário
   const [formData, setFormData] = useState<Partial<Transaction>>({
-    type: 'saida',
-    status: 'pago',
     date: new Date().toISOString().split('T')[0],
-    amount: 0,
-    description: '',
+    type: 'Despesa',
     category: 'Insumos',
+    description: '',
+    amount: 0,
     paymentMethod: 'Pix',
+    costCenter: 'Produção',
+    beneficiary: '',
+    status: 'Pago',
+    observation: '',
+    receiptImage: ''
   });
 
   useEffect(() => {
@@ -49,136 +58,275 @@ export default function FinancePage() {
     setLoading(false);
   };
 
+  // --- LÓGICA DE DRAG & DROP E UPLOAD ---
+  const handleDrag = (e: any) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === "dragenter" || e.type === "dragover") {
+      setDragActive(true);
+    } else if (e.type === "dragleave") {
+      setDragActive(false);
+    }
+  };
+
+  const handleDrop = (e: any) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      handleFile(e.dataTransfer.files[0]);
+    }
+  };
+
+  const handleChangeFile = (e: any) => {
+    e.preventDefault();
+    if (e.target.files && e.target.files[0]) {
+      handleFile(e.target.files[0]);
+    }
+  };
+
+  const handleFile = (file: File) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+        // Salva a imagem como string Base64 para exibir e salvar no banco
+        setFormData(prev => ({ ...prev, receiptImage: reader.result as string }));
+    };
+    reader.readAsDataURL(file);
+  };
+  // ---------------------------------------
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const res = await fetch('/api/finance', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(formData),
+    });
+    if (res.ok) {
+      alert('Lançamento salvo com sucesso!');
+      setFormData({ ...formData, description: '', amount: 0, receiptImage: '', beneficiary: '' }); // Limpa campos principais
+      fetchTransactions();
+    }
+  };
+
   const handleDelete = async (id: string) => {
-    if (!confirm('Tem certeza que deseja excluir?')) return;
+    if (!confirm('Excluir lançamento?')) return;
     await fetch(`/api/finance?id=${id}`, { method: 'DELETE' });
     fetchTransactions();
   };
 
-  // --- CÂMERA ---
-  const startCamera = async () => {
-    setShowCamera(true);
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-    if (videoRef.current) videoRef.current.srcObject = stream;
-  };
-
-  const capturePhoto = () => {
-    if (videoRef.current && canvasRef.current) {
-        const context = canvasRef.current.getContext('2d');
-        if (context) {
-            context.drawImage(videoRef.current, 0, 0, 300, 200);
-            const imageData = canvasRef.current.toDataURL('image/jpeg');
-            setFormData({ ...formData, attachment: imageData });
-            
-            // Para a câmera
-            const stream = videoRef.current.srcObject as MediaStream;
-            stream?.getTracks().forEach(t => t.stop());
-            setShowCamera(false);
-        }
-    }
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    await fetch('/api/finance', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData)
-    });
-    setIsModalOpen(false);
-    setFormData({ type: 'saida', status: 'pago', date: new Date().toISOString().split('T')[0], amount: 0, description: '' });
-    fetchTransactions();
-  };
-
   // Cálculos de Resumo
-  const totalEntradas = transactions.filter(t => t.type === 'entrada').reduce((acc, t) => acc + t.amount, 0);
-  const totalSaidas = transactions.filter(t => t.type === 'saida').reduce((acc, t) => acc + t.amount, 0);
-  const saldo = totalEntradas - totalSaidas;
+  const totalReceitas = transactions.filter(t => t.type === 'Receita').reduce((acc, t) => acc + t.amount, 0);
+  const totalDespesas = transactions.filter(t => t.type === 'Despesa').reduce((acc, t) => acc + t.amount, 0);
+  const saldo = totalReceitas - totalDespesas;
 
   return (
-    <div className="min-h-screen relative font-sans text-gray-800">
+    <div className="min-h-screen relative font-sans text-gray-800 pb-20">
       <Head><title>Financeiro | Glacê</title></Head>
 
-      {/* --- FUNDO PADRÃO --- */}
-      <div className="fixed inset-0 z-0" style={{ backgroundImage: "url('/bg-confeitaria.png')", backgroundSize: 'cover', backgroundPosition: 'center' }}></div>
+      {/* Fundo */}
+      <div className="fixed inset-0 z-0" style={{ backgroundImage: "url('/bg-confeitaria.png')", backgroundSize: 'cover' }}></div>
       <div className="fixed inset-0 z-0 bg-pattern-overlay"></div>
 
-      {/* --- CONTEÚDO --- */}
       <div className="relative z-10 max-w-6xl mx-auto py-10 px-4">
         
-        {/* CABEÇALHO */}
+        {/* Cabeçalho */}
         <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
             <div>
                 <h1 className="text-4xl font-serif font-bold text-glace-wine">Financeiro</h1>
-                <p className="text-glace-gold text-sm uppercase tracking-widest font-semibold">Fluxo de Caixa</p>
+                <p className="text-glace-gold text-sm uppercase tracking-widest font-semibold mt-1">Fluxo de Caixa & Lançamentos</p>
             </div>
-            <div className="space-x-3">
-                <button onClick={() => setIsModalOpen(true)} className="bg-glace-wine hover:bg-red-900 text-white px-6 py-2 rounded-full shadow-lg transition transform hover:scale-105 font-bold">
-                    + Novo Lançamento
-                </button>
-                <Link href="/" className="bg-white text-glace-wine border border-glace-wine px-6 py-2 rounded-full font-bold hover:bg-red-50 transition">
-                    Voltar
-                </Link>
+            <Link href="/" className="bg-white/80 backdrop-blur text-glace-wine px-6 py-3 rounded-full font-bold shadow-sm hover:bg-white transition">
+                ⬅️ Voltar ao Painel
+            </Link>
+        </div>
+
+        {/* --- CARDS DE RESUMO --- */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
+            <div className="bg-white/90 p-6 rounded-2xl shadow-lg border-l-4 border-green-500">
+                <p className="text-xs font-bold text-gray-400 uppercase">Total Receitas</p>
+                <p className="text-3xl font-bold text-green-600">R$ {totalReceitas.toFixed(2)}</p>
+            </div>
+            <div className="bg-white/90 p-6 rounded-2xl shadow-lg border-l-4 border-red-500">
+                <p className="text-xs font-bold text-gray-400 uppercase">Total Despesas</p>
+                <p className="text-3xl font-bold text-red-600">R$ {totalDespesas.toFixed(2)}</p>
+            </div>
+            <div className="bg-glace-wine text-white p-6 rounded-2xl shadow-lg border-l-4 border-glace-gold relative overflow-hidden">
+                <div className="relative z-10">
+                    <p className="text-xs font-bold text-white/70 uppercase">Saldo Atual</p>
+                    <p className="text-3xl font-bold">R$ {saldo.toFixed(2)}</p>
+                </div>
+                <div className="absolute right-[-20px] top-[-20px] text-white/10 text-9xl font-serif">$</div>
             </div>
         </div>
 
-        {/* --- CARDS DE RESUMO (GLASSMORPHISM) --- */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-            <div className="glass-panel p-6 rounded-2xl shadow-sm border-l-4 border-green-500">
-                <p className="text-sm text-gray-500 font-bold uppercase">Entradas</p>
-                <p className="text-3xl font-serif text-green-600 font-bold">R$ {totalEntradas.toFixed(2)}</p>
-            </div>
-            <div className="glass-panel p-6 rounded-2xl shadow-sm border-l-4 border-red-500">
-                <p className="text-sm text-gray-500 font-bold uppercase">Saídas</p>
-                <p className="text-3xl font-serif text-red-600 font-bold">R$ {totalSaidas.toFixed(2)}</p>
-            </div>
-            <div className={`glass-panel p-6 rounded-2xl shadow-lg border-l-4 ${saldo >= 0 ? 'border-glace-gold' : 'border-red-600'}`}>
-                <p className="text-sm text-gray-500 font-bold uppercase">Saldo Atual</p>
-                <p className={`text-4xl font-serif font-bold ${saldo >= 0 ? 'text-glace-wine' : 'text-red-600'}`}>
-                    R$ {saldo.toFixed(2)}
-                </p>
-            </div>
+        {/* --- FORMULÁRIO COMPLETO (BASEADO NA PLANILHA) --- */}
+        <div className="glass-panel p-8 rounded-3xl shadow-2xl mb-12 border border-white/60">
+            <h2 className="font-serif font-bold text-2xl text-glace-wine mb-6 border-b border-glace-gold/20 pb-2">Novo Lançamento</h2>
+            
+            <form onSubmit={handleSubmit}>
+                <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
+                    
+                    {/* Linha 1: Data, Tipo e Valor (Destaques) */}
+                    <div className="md:col-span-3">
+                        <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Data Lançamento</label>
+                        <input type="date" className="w-full p-3 rounded-xl border-none bg-white/70 shadow-inner focus:ring-2 focus:ring-glace-gold" value={formData.date} onChange={e => setFormData({...formData, date: e.target.value})} required />
+                    </div>
+                    <div className="md:col-span-3">
+                        <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Tipo</label>
+                        <div className="flex bg-white/70 rounded-xl p-1 shadow-inner">
+                            <button type="button" onClick={() => setFormData({...formData, type: 'Receita'})} className={`flex-1 py-2 rounded-lg text-sm font-bold transition ${formData.type === 'Receita' ? 'bg-green-500 text-white shadow' : 'text-gray-500 hover:bg-white'}`}>Receita</button>
+                            <button type="button" onClick={() => setFormData({...formData, type: 'Despesa'})} className={`flex-1 py-2 rounded-lg text-sm font-bold transition ${formData.type === 'Despesa' ? 'bg-red-500 text-white shadow' : 'text-gray-500 hover:bg-white'}`}>Despesa</button>
+                        </div>
+                    </div>
+                    <div className="md:col-span-6">
+                        <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Valor (R$)</label>
+                        <div className="relative">
+                            <span className="absolute left-4 top-3 text-gray-500 font-bold">R$</span>
+                            <input type="number" step="0.01" className="w-full p-3 pl-10 rounded-xl border-none bg-white/70 shadow-inner focus:ring-2 focus:ring-glace-gold text-xl font-bold text-gray-800" value={formData.amount || ''} onChange={e => setFormData({...formData, amount: parseFloat(e.target.value)})} required />
+                        </div>
+                    </div>
+
+                    {/* Linha 2: Descrição e Categoria */}
+                    <div className="md:col-span-8">
+                        <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Descrição do Lançamento</label>
+                        <input type="text" placeholder="Ex: Compra de Chocolate Belga" className="w-full p-3 rounded-xl border-none bg-white/70 shadow-inner focus:ring-2 focus:ring-glace-gold" value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})} required />
+                    </div>
+                    <div className="md:col-span-4">
+                        <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Categoria</label>
+                        <select className="w-full p-3 rounded-xl border-none bg-white/70 shadow-inner focus:ring-2 focus:ring-glace-gold cursor-pointer" value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})}>
+                            {(formData.type === 'Receita' ? CATEGORIES_RECEITA : CATEGORIES_DESPESA).map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                    </div>
+
+                    {/* Linha 3: Detalhes Financeiros */}
+                    <div className="md:col-span-4">
+                        <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Meio de Pagamento</label>
+                        <select className="w-full p-3 rounded-xl border-none bg-white/70 shadow-inner focus:ring-2 focus:ring-glace-gold" value={formData.paymentMethod} onChange={e => setFormData({...formData, paymentMethod: e.target.value})}>
+                             {PAYMENT_METHODS.map(m => <option key={m} value={m}>{m}</option>)}
+                        </select>
+                    </div>
+                    <div className="md:col-span-4">
+                        <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Centro de Custo</label>
+                        <select className="w-full p-3 rounded-xl border-none bg-white/70 shadow-inner focus:ring-2 focus:ring-glace-gold" value={formData.costCenter} onChange={e => setFormData({...formData, costCenter: e.target.value})}>
+                             {COST_CENTERS.map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                    </div>
+                    <div className="md:col-span-4">
+                        <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Status</label>
+                        <select className={`w-full p-3 rounded-xl border-none shadow-inner focus:ring-2 focus:ring-glace-gold font-bold ${formData.status === 'Pago' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`} value={formData.status} onChange={e => setFormData({...formData, status: e.target.value as any})}>
+                            <option value="Pago">Pago / Recebido</option>
+                            <option value="Pendente">Pendente</option>
+                            <option value="Agendado">Agendado</option>
+                        </select>
+                    </div>
+
+                    {/* Linha 4: Beneficiário e Observação */}
+                    <div className="md:col-span-6">
+                        <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Beneficiário / Fornecedor</label>
+                        <input type="text" placeholder="Quem recebeu ou pagou?" className="w-full p-3 rounded-xl border-none bg-white/70 shadow-inner focus:ring-2 focus:ring-glace-gold" value={formData.beneficiary} onChange={e => setFormData({...formData, beneficiary: e.target.value})} />
+                    </div>
+                    <div className="md:col-span-6">
+                        <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Data do Pagamento (Opcional)</label>
+                         <input type="date" className="w-full p-3 rounded-xl border-none bg-white/70 shadow-inner focus:ring-2 focus:ring-glace-gold" value={formData.paymentDate || ''} onChange={e => setFormData({...formData, paymentDate: e.target.value})} />
+                    </div>
+
+                    {/* Linha 5: ANEXO (DRAG AND DROP) */}
+                    <div className="md:col-span-12">
+                         <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Comprovante / Recibo</label>
+                         
+                         <div 
+                            className={`relative border-2 border-dashed rounded-2xl p-6 flex flex-col items-center justify-center text-center transition-all cursor-pointer ${dragActive ? 'border-glace-gold bg-yellow-50 scale-[1.01]' : 'border-gray-300 bg-white/50 hover:border-glace-wine hover:bg-white/80'}`}
+                            onDragEnter={handleDrag}
+                            onDragLeave={handleDrag}
+                            onDragOver={handleDrag}
+                            onDrop={handleDrop}
+                            onClick={() => inputRef.current?.click()}
+                         >
+                            <input 
+                                ref={inputRef}
+                                type="file" 
+                                className="hidden" 
+                                onChange={handleChangeFile}
+                                accept="image/*,.pdf"
+                            />
+                            
+                            {formData.receiptImage ? (
+                                <div className="flex items-center gap-4">
+                                    <div className="w-16 h-16 rounded-lg overflow-hidden shadow-md border border-gray-200">
+                                        {/* Exibe miniatura se for imagem */}
+                                        <img src={formData.receiptImage} alt="Preview" className="w-full h-full object-cover" />
+                                    </div>
+                                    <div className="text-left">
+                                        <p className="text-green-600 font-bold text-sm">✅ Comprovante anexado!</p>
+                                        <p className="text-xs text-gray-400">Clique para trocar</p>
+                                    </div>
+                                </div>
+                            ) : (
+                                <>
+                                    <span className="text-4xl mb-2 text-glace-wine">📎</span>
+                                    <p className="text-gray-600 font-medium">Arraste e solte o comprovante aqui</p>
+                                    <p className="text-xs text-gray-400 mt-1">ou clique para buscar na pasta</p>
+                                </>
+                            )}
+                         </div>
+                    </div>
+
+                    {/* Linha Final: Observações e Botão */}
+                    <div className="md:col-span-12">
+                        <textarea rows={2} className="w-full p-3 rounded-xl border-none bg-white/70 shadow-inner focus:ring-2 focus:ring-glace-gold placeholder-gray-400 text-sm" placeholder="Observações adicionais..." value={formData.observation} onChange={e => setFormData({...formData, observation: e.target.value})}></textarea>
+                    </div>
+
+                    <div className="md:col-span-12">
+                        <button type="submit" className="w-full py-4 bg-glace-wine text-white font-bold rounded-xl shadow-lg hover:bg-red-900 transition transform active:scale-[0.99] uppercase tracking-wider text-lg">
+                            💾 Lançar no Financeiro
+                        </button>
+                    </div>
+
+                </div>
+            </form>
         </div>
 
-        {/* --- TABELA (CARD BRANCO) --- */}
-        <div className="bg-white rounded-2xl shadow-xl overflow-hidden border border-gray-100">
-            <div className="overflow-x-auto">
+        {/* --- TABELA DE LANÇAMENTOS RECENTES --- */}
+        <div className="mt-12">
+            <h3 className="font-serif font-bold text-2xl text-gray-700 mb-6">Últimos Movimentos</h3>
+            <div className="bg-white rounded-2xl shadow-lg overflow-hidden border border-gray-100">
                 <table className="min-w-full text-sm">
-                    <thead className="bg-glace-cream text-glace-wine font-serif font-bold border-b border-glace-gold/30">
+                    <thead className="bg-glace-cream text-glace-wine font-bold">
                         <tr>
                             <th className="px-6 py-4 text-left">Data</th>
                             <th className="px-6 py-4 text-left">Descrição</th>
-                            <th className="px-6 py-4 text-left">Categoria</th>
+                            <th className="px-6 py-4 text-center">Categoria</th>
+                            <th className="px-6 py-4 text-center">Comprovante</th>
                             <th className="px-6 py-4 text-right">Valor</th>
-                            <th className="px-6 py-4 text-center">Status</th>
                             <th className="px-6 py-4 text-center">Ações</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
-                        {loading && <tr><td colSpan={6} className="p-8 text-center text-gray-400">Carregando dados...</td></tr>}
-                        {!loading && transactions.length === 0 && (
-                            <tr><td colSpan={6} className="p-8 text-center text-gray-400">Nenhum lançamento encontrado.</td></tr>
-                        )}
-                        {transactions.map((t) => (
-                            <tr key={t._id} className="hover:bg-red-50/30 transition-colors">
-                                <td className="px-6 py-4 text-gray-600">{new Date(t.date).toLocaleDateString()}</td>
-                                <td className="px-6 py-4 font-medium text-gray-800">
+                        {transactions.map(t => (
+                            <tr key={t._id} className="hover:bg-gray-50 transition">
+                                <td className="px-6 py-4 text-gray-500">{new Date(t.date).toLocaleDateString()}</td>
+                                <td className="px-6 py-4 font-bold text-gray-700">
                                     {t.description}
-                                    {t.attachment && <span className="ml-2 text-xs bg-blue-100 text-blue-700 px-1 rounded">📎 Foto</span>}
-                                </td>
-                                <td className="px-6 py-4 text-gray-500">{t.category}</td>
-                                <td className={`px-6 py-4 text-right font-bold ${t.type === 'entrada' ? 'text-green-600' : 'text-red-600'}`}>
-                                    {t.type === 'saida' ? '- ' : ''}R$ {t.amount.toFixed(2)}
+                                    <div className="text-xs text-gray-400 font-normal">{t.beneficiary} • {t.paymentMethod}</div>
                                 </td>
                                 <td className="px-6 py-4 text-center">
-                                    <span className={`px-2 py-1 rounded-full text-xs font-bold ${t.status === 'pago' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
-                                        {t.status.toUpperCase()}
+                                    <span className="px-3 py-1 rounded-full text-xs font-bold bg-gray-100 text-gray-600">
+                                        {t.category}
                                     </span>
                                 </td>
                                 <td className="px-6 py-4 text-center">
-                                    <button onClick={() => handleDelete(t._id)} className="text-gray-400 hover:text-red-600 transition">
-                                        🗑️
-                                    </button>
+                                    {t.receiptImage ? (
+                                        <span className="text-green-500 text-lg" title="Comprovante salvo">📄</span>
+                                    ) : (
+                                        <span className="text-gray-300">-</span>
+                                    )}
+                                </td>
+                                <td className={`px-6 py-4 text-right font-bold text-lg ${t.type === 'Receita' ? 'text-green-600' : 'text-red-600'}`}>
+                                    {t.type === 'Receita' ? '+' : '-'} R$ {t.amount.toFixed(2)}
+                                </td>
+                                <td className="px-6 py-4 text-center">
+                                    <button onClick={() => handleDelete(t._id)} className="text-gray-400 hover:text-red-600 transition">🗑️</button>
                                 </td>
                             </tr>
                         ))}
@@ -186,118 +334,6 @@ export default function FinancePage() {
                 </table>
             </div>
         </div>
-
-        {/* --- MODAL DE NOVO LANÇAMENTO --- */}
-        {isModalOpen && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-                <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden border-t-8 border-glace-wine">
-                    <div className="bg-gray-50 px-6 py-4 border-b flex justify-between items-center">
-                        <h2 className="font-serif text-xl font-bold text-glace-wine">Novo Lançamento</h2>
-                        <button onClick={() => setIsModalOpen(false)} className="text-gray-400 hover:text-red-500 text-2xl">×</button>
-                    </div>
-                    
-                    <form onSubmit={handleSubmit} className="p-6 space-y-4">
-                        <div className="grid grid-cols-2 gap-4">
-                            <div>
-                                <label className="block text-xs font-bold text-gray-500 mb-1">TIPO</label>
-                                <select 
-                                    className="w-full border rounded-lg p-2 focus:ring-2 focus:ring-glace-gold outline-none"
-                                    value={formData.type} 
-                                    onChange={e => setFormData({...formData, type: e.target.value as any})}
-                                >
-                                    <option value="saida">🔴 Saída (Despesa)</option>
-                                    <option value="entrada">🟢 Entrada (Receita)</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label className="block text-xs font-bold text-gray-500 mb-1">VALOR (R$)</label>
-                                <input 
-                                    type="number" step="0.01" required
-                                    className="w-full border rounded-lg p-2 focus:ring-2 focus:ring-glace-gold outline-none"
-                                    value={formData.amount} 
-                                    onChange={e => setFormData({...formData, amount: Number(e.target.value)})} 
-                                />
-                            </div>
-                        </div>
-
-                        <div>
-                            <label className="block text-xs font-bold text-gray-500 mb-1">DESCRIÇÃO</label>
-                            <input 
-                                type="text" required placeholder="Ex: Compra de Farinha"
-                                className="w-full border rounded-lg p-2 focus:ring-2 focus:ring-glace-gold outline-none"
-                                value={formData.description} 
-                                onChange={e => setFormData({...formData, description: e.target.value})} 
-                            />
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-4">
-                            <div>
-                                <label className="block text-xs font-bold text-gray-500 mb-1">CATEGORIA</label>
-                                <select 
-                                    className="w-full border rounded-lg p-2 focus:ring-2 focus:ring-glace-gold outline-none"
-                                    value={formData.category} 
-                                    onChange={e => setFormData({...formData, category: e.target.value})}
-                                >
-                                    <option>Insumos</option>
-                                    <option>Embalagens</option>
-                                    <option>Vendas</option>
-                                    <option>Fixos (Luz/Água)</option>
-                                    <option>Outros</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label className="block text-xs font-bold text-gray-500 mb-1">DATA</label>
-                                <input 
-                                    type="date" 
-                                    className="w-full border rounded-lg p-2 focus:ring-2 focus:ring-glace-gold outline-none"
-                                    value={formData.date} 
-                                    onChange={e => setFormData({...formData, date: e.target.value})} 
-                                />
-                            </div>
-                        </div>
-
-                        {/* Área da Câmera */}
-                        <div className="border-t pt-4">
-                            <label className="block text-xs font-bold text-gray-500 mb-2">COMPROVANTE (FOTO)</label>
-                            
-                            {!showCamera && !formData.attachment && (
-                                <button type="button" onClick={startCamera} className="w-full bg-blue-50 text-blue-600 py-2 rounded-lg border border-blue-200 hover:bg-blue-100 transition flex items-center justify-center gap-2">
-                                    📷 Abrir Câmera
-                                </button>
-                            )}
-
-                            {showCamera && (
-                                <div className="space-y-2">
-                                    <video ref={videoRef} autoPlay className="w-full rounded-lg bg-black h-48 object-cover"></video>
-                                    <button type="button" onClick={capturePhoto} className="w-full bg-green-600 text-white py-2 rounded-lg font-bold shadow">
-                                        📸 Capturar Foto
-                                    </button>
-                                </div>
-                            )}
-
-                            {formData.attachment && (
-                                <div className="relative mt-2">
-                                    <img src={formData.attachment} alt="Preview" className="w-full h-32 object-cover rounded-lg border" />
-                                    <button 
-                                        type="button" 
-                                        onClick={() => setFormData({...formData, attachment: undefined})}
-                                        className="absolute top-2 right-2 bg-red-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs"
-                                    >
-                                        X
-                                    </button>
-                                    <p className="text-center text-xs text-green-600 font-bold mt-1">Foto anexada com sucesso!</p>
-                                </div>
-                            )}
-                            <canvas ref={canvasRef} width="300" height="200" className="hidden"></canvas>
-                        </div>
-
-                        <button type="submit" className="w-full bg-glace-wine hover:bg-red-900 text-white font-bold py-3 rounded-xl shadow-lg transition transform active:scale-95 mt-4">
-                            Salvar Lançamento
-                        </button>
-                    </form>
-                </div>
-            </div>
-        )}
 
       </div>
     </div>

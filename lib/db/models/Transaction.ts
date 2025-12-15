@@ -1,25 +1,36 @@
-import mongoose, { Schema, model, models } from 'mongoose';
+import mongoose, { Document, Schema } from 'mongoose';
 
-const TransactionSchema = new Schema({
-  type: { type: String, required: true, enum: ['entrada', 'saida'] },
+export interface ITransaction extends Document {
+  date: Date;                // Coluna B: Data
+  type: 'Receita' | 'Despesa'; // Coluna C: Tipo
+  category: string;          // Coluna D: Categoria
+  description: string;       // Coluna E: Descrição
+  amount: number;            // Coluna F: Valor
+  paymentMethod: string;     // Coluna G: Meio Pagamento
+  costCenter: string;        // Coluna H: Centro Custo
+  beneficiary: string;       // Coluna I: Beneficiário
+  status: 'Pago' | 'Pendente' | 'Agendado'; // Coluna J: Status
+  observation: string;       // Coluna K: Observações
+  paymentDate?: Date;        // Coluna L: Data Pagamento
+  receiptImage?: string;     // Coluna M: Foto Comprovante (Base64)
+}
+
+const TransactionSchema: Schema = new Schema({
+  date: { type: Date, required: true, default: Date.now },
+  type: { type: String, required: true, enum: ['Receita', 'Despesa'] },
   category: { type: String, required: true },
   description: { type: String, required: true },
   amount: { type: Number, required: true },
-  date: { type: String, required: true },
-  
-  paymentMethod: { type: String, default: 'Dinheiro' },
-  costCenter: { type: String, default: 'Variável' },
-  payee: { type: String, default: '' },
-  status: { type: String, default: 'Pendente' },
-  observation: { type: String, default: '' },
-  dueDate: { type: String, default: '' },
-  
-  // --- MUDANÇA: Campo para a Imagem (String gigante) ---
-  attachment: { type: String, default: '' }, 
-  
-  createdAt: { type: Date, default: Date.now },
+  paymentMethod: { type: String, default: 'Pix' },
+  costCenter: { type: String, default: 'Geral' },
+  beneficiary: { type: String },
+  status: { type: String, default: 'Pago', enum: ['Pago', 'Pendente', 'Agendado'] },
+  observation: { type: String },
+  paymentDate: { type: Date },
+  receiptImage: { type: String } // Armazena a imagem codificada
 });
 
-const Transaction = models.Transaction || model('Transaction', TransactionSchema);
+// Evita erro de recompilação ao trocar de página
+const Transaction = mongoose.models.Transaction || mongoose.model<ITransaction>('Transaction', TransactionSchema);
 
 export default Transaction;
