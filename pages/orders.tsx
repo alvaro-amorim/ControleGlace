@@ -25,12 +25,10 @@ export default function OrdersPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   
-  // UI Controls
   const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' | 'warning' | 'info' } | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
 
-  // Modal Controls
   const [customModal, setCustomModal] = useState({
     isOpen: false,
     type: 'confirm' as 'confirm' | 'input',
@@ -40,10 +38,16 @@ export default function OrdersPage() {
     onConfirm: (val?: string) => {}
   });
   
-  const today = new Date().toISOString().slice(0, 16);
+  // Data atual formatada para o input (YYYY-MM-DDTHH:mm)
+  // O slice(0, 16) pega os minutos e ignora segundos/fuso para o input local
+  const getLocalDateTime = () => {
+    const now = new Date();
+    now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+    return now.toISOString().slice(0, 16);
+  };
 
   const [formData, setFormData] = useState<Partial<Order>>({
-    orderDate: today, 
+    orderDate: getLocalDateTime(), 
     customerName: '', deliveryDate: '', description: '', totalValue: 0,
     paymentStatus: 'Pendente', status: 'Pendente', deliveryMethod: 'Retirada',
     address: '', contact: '', observation: ''
@@ -76,16 +80,11 @@ export default function OrdersPage() {
         onConfirm: async () => {
             setLoading(true);
             try {
-                const res = await fetch('/api/orders/sync', { method: 'POST' });
-                const data = await res.json(); // Ler resposta
-                if (res.ok && data.success) {
-                    setToast({ message: 'Sincronizado com sucesso!', type: 'success' });
-                    fetchOrders();
-                } else {
-                    setToast({ message: 'Erro na sincronização.', type: 'error' });
-                }
+                await fetch('/api/orders/sync', { method: 'POST' });
+                setToast({ message: 'Sincronizado com sucesso!', type: 'success' });
+                fetchOrders();
             } catch (e) {
-                setToast({ message: 'Erro de conexão.', type: 'error' });
+                setToast({ message: 'Erro na sincronização.', type: 'error' });
             }
             setLoading(false);
         }
@@ -97,17 +96,12 @@ export default function OrdersPage() {
     
     const saveOrder = async () => {
         const method = isEditing ? 'PUT' : 'POST';
-        
-        // CORREÇÃO: Limpa o objeto para evitar enviar dados sujos
         const payload: any = { 
             ...formData, 
             totalValue: Number(formData.totalValue) || 0 
         };
 
-        // Se for criar (POST), remove o _id para o Mongo criar um novo
-        if (!isEditing) {
-            delete payload._id;
-        }
+        if (!isEditing) delete payload._id;
 
         try {
             const res = await fetch('/api/orders', {
@@ -116,21 +110,16 @@ export default function OrdersPage() {
                 body: JSON.stringify(payload),
             });
 
-            const responseData = await res.json(); // Lemos a resposta do servidor
-
             if (res.ok) {
                 setToast({ message: isEditing ? 'Pedido Atualizado!' : 'Pedido Criado!', type: 'success' });
                 resetForm();
                 setShowModal(false);
                 fetchOrders();
             } else {
-                // Aqui mostramos o erro REAL que veio do servidor (ex: "Data inválida")
-                console.error("Erro API:", responseData);
-                const errorMsg = responseData.error || responseData.message || 'Erro ao salvar. Verifique os campos.';
-                setToast({ message: `Erro: ${errorMsg}`, type: 'error' });
+                setToast({ message: 'Erro ao salvar. Verifique os dados.', type: 'error' });
             }
         } catch (error) {
-            setToast({ message: 'Erro de conexão com o servidor.', type: 'error' });
+            setToast({ message: 'Erro de conexão.', type: 'error' });
         }
     };
     
@@ -168,13 +157,9 @@ export default function OrdersPage() {
                     inputType: 'password',
                     onConfirm: async (code) => {
                         if (code === SECURITY_CODE) {
-                            const res = await fetch(`/api/orders?id=${id}`, { method: 'DELETE' });
-                            if (res.ok) {
-                                setToast({ message: 'Pedido excluído!', type: 'warning' });
-                                fetchOrders();
-                            } else {
-                                setToast({ message: 'Erro ao excluir.', type: 'error' });
-                            }
+                            await fetch(`/api/orders?id=${id}`, { method: 'DELETE' });
+                            setToast({ message: 'Pedido excluído!', type: 'warning' });
+                            fetchOrders();
                         } else {
                             setToast({ message: 'Senha incorreta!', type: 'error' });
                         }
@@ -186,9 +171,14 @@ export default function OrdersPage() {
   };
 
   const startEdit = (o: Order) => {
-    const fmtDelivery = o.deliveryDate ? new Date(o.deliveryDate).toISOString().slice(0, 16) : '';
-    const fmtOrder = o.orderDate ? new Date(o.orderDate).toISOString().slice(0, 16) : '';
-    setFormData({ ...o, deliveryDate: fmtDelivery, orderDate: fmtOrder });
+    // Formata datas para o input local (YYYY-MM-DDTHH:mm)
+    const fmtDate = (d: string) => d ? new Date(d).toISOString().slice(0, 16) : '';
+    
+    setFormData({ 
+        ...o, 
+        deliveryDate: fmtDate(o.deliveryDate), 
+        orderDate: fmtDate(o.orderDate) 
+    });
     setIsEditing(true);
     setShowModal(true);
   };
@@ -201,7 +191,7 @@ export default function OrdersPage() {
 
   const resetForm = () => {
     setFormData({ 
-        orderDate: today, 
+        orderDate: getLocalDateTime(), 
         customerName: '', deliveryDate: '', description: '', totalValue: 0, 
         paymentStatus: 'Pendente', status: 'Pendente', deliveryMethod: 'Retirada', 
         address: '', contact: '', observation: '' 
@@ -355,7 +345,12 @@ export default function OrdersPage() {
                 ) : (
                     openOrders.map(order => {
                         const date = new Date(order.deliveryDate);
-                        const isToday = new Date().toDateString() === new Date().toDateString();
+                        
+                        // --- CORREÇÃO DA LÓGICA 'ENTREGA HOJE' ---
+                        const today = new Date();
+                        const isToday = date.getDate() === today.getDate() &&
+                                      date.getMonth() === today.getMonth() &&
+                                      date.getFullYear() === today.getFullYear();
                         
                         return (
                             <div key={order._id || Math.random()} className={`bg-white rounded-xl shadow-md p-6 border-l-8 relative overflow-hidden transition hover:-translate-y-1 ${isToday ? 'border-red-500 ring-4 ring-red-50' : 'border-blue-500'}`}>

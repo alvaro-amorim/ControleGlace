@@ -2,14 +2,6 @@ import dbConnect from '../../../lib/db/mongoose';
 import Order from '../../../lib/db/models/Order';
 import type { NextApiRequest, NextApiResponse } from 'next';
 
-// Função auxiliar para ajustar data para UTC-3 (Juiz de Fora)
-const adjustDateToMG = (dateString: string | Date) => {
-    if (!dateString) return new Date();
-    const date = new Date(dateString);
-    date.setHours(date.getHours() - 3);
-    return date;
-};
-
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { method } = req;
 
@@ -18,7 +10,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   switch (method) {
     case 'GET':
       try {
-        // Busca todos os pedidos ordenados por data (mais recentes primeiro)
+        // Busca todos os pedidos
         const orders = await Order.find({}).sort({ orderDate: -1 });
         res.status(200).json({ success: true, data: orders });
       } catch (error) {
@@ -32,10 +24,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // Garante que o ID não seja enviado manualmente
         const { _id, ...newOrderData } = req.body;
         
-        // Ajusta data de entrada se necessário (opcional, pois o front já manda)
-        // Mas garante que a data de criação no banco seja precisa
+        // Se a data de criação não vier, usa o momento atual
         if (!newOrderData.orderDate) {
-            newOrderData.orderDate = adjustDateToMG(new Date());
+            newOrderData.orderDate = new Date();
         }
 
         const order = await Order.create(newOrderData);
