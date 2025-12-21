@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
-import Toast from '../components/Toast'; // Card de Notificação
-import CustomModal from '../components/CustomModal'; // Modal Bonito
+import Toast from '../components/Toast'; 
+import CustomModal from '../components/CustomModal'; 
 
 interface Order {
   _id: string;
@@ -19,19 +19,18 @@ interface Order {
   observation: string;
 }
 
-// --- SENHA MESTRE ---
 const SECURITY_CODE = '104298';
 
 export default function OrdersPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   
-  // Controle de UI (Toast e Modais)
+  // UI Controls
   const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' | 'warning' | 'info' } | null>(null);
-  const [showModal, setShowModal] = useState(false); // Modal do Formulário
+  const [showModal, setShowModal] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
 
-  // Controle do Modal de Confirmação/Input
+  // Modal Controls
   const [customModal, setCustomModal] = useState({
     isOpen: false,
     type: 'confirm' as 'confirm' | 'input',
@@ -68,21 +67,25 @@ export default function OrdersPage() {
   };
 
   const handleSync = async () => {
-    // Substitui confirm() por Modal
     setCustomModal({
         isOpen: true,
         type: 'confirm',
         title: 'Sincronizar Planilha',
         message: 'Isso vai buscar dados da PLANILHA e atualizar o sistema. Deseja continuar?',
-        inputType: 'text', // CORREÇÃO: Adicionado para satisfazer o TypeScript
+        inputType: 'text',
         onConfirm: async () => {
             setLoading(true);
             try {
-                await fetch('/api/orders/sync', { method: 'POST' });
-                setToast({ message: 'Sincronizado com sucesso!', type: 'success' });
-                fetchOrders();
+                const res = await fetch('/api/orders/sync', { method: 'POST' });
+                const data = await res.json(); // Ler resposta
+                if (res.ok && data.success) {
+                    setToast({ message: 'Sincronizado com sucesso!', type: 'success' });
+                    fetchOrders();
+                } else {
+                    setToast({ message: 'Erro na sincronização.', type: 'error' });
+                }
             } catch (e) {
-                setToast({ message: 'Erro na sincronização.', type: 'error' });
+                setToast({ message: 'Erro de conexão.', type: 'error' });
             }
             setLoading(false);
         }
@@ -92,60 +95,70 @@ export default function OrdersPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    // Função interna para salvar (usada direto ou após senha)
     const saveOrder = async () => {
         const method = isEditing ? 'PUT' : 'POST';
-        const payload = { ...formData, totalValue: Number(formData.totalValue) || 0 };
+        
+        // CORREÇÃO: Limpa o objeto para evitar enviar dados sujos
+        const payload: any = { 
+            ...formData, 
+            totalValue: Number(formData.totalValue) || 0 
+        };
 
-        const res = await fetch('/api/orders', {
-            method, 
-            headers: { 'Content-Type': 'application/json' }, 
-            body: JSON.stringify(payload),
-        });
+        // Se for criar (POST), remove o _id para o Mongo criar um novo
+        if (!isEditing) {
+            delete payload._id;
+        }
 
-        if (res.ok) {
-            setToast({ message: isEditing ? 'Pedido Atualizado!' : 'Pedido Criado!', type: 'success' });
-            resetForm();
-            setShowModal(false);
-            fetchOrders();
-        } else {
-            setToast({ message: 'Erro ao salvar pedido.', type: 'error' });
+        try {
+            const res = await fetch('/api/orders', {
+                method, 
+                headers: { 'Content-Type': 'application/json' }, 
+                body: JSON.stringify(payload),
+            });
+
+            const responseData = await res.json(); // Lemos a resposta do servidor
+
+            if (res.ok) {
+                setToast({ message: isEditing ? 'Pedido Atualizado!' : 'Pedido Criado!', type: 'success' });
+                resetForm();
+                setShowModal(false);
+                fetchOrders();
+            } else {
+                // Aqui mostramos o erro REAL que veio do servidor (ex: "Data inválida")
+                console.error("Erro API:", responseData);
+                const errorMsg = responseData.error || responseData.message || 'Erro ao salvar. Verifique os campos.';
+                setToast({ message: `Erro: ${errorMsg}`, type: 'error' });
+            }
+        } catch (error) {
+            setToast({ message: 'Erro de conexão com o servidor.', type: 'error' });
         }
     };
     
-    // --- LÓGICA DE PROTEÇÃO ---
     if (isEditing) {
-        // Se for edição, pede senha no Modal
         setCustomModal({
             isOpen: true,
             type: 'input',
             title: 'Salvar Alterações',
-            message: 'Digite a SENHA MESTRE para confirmar a edição:',
+            message: 'Digite a SENHA MESTRE para confirmar:',
             inputType: 'password',
             onConfirm: (code) => {
-                if (code === SECURITY_CODE) {
-                    saveOrder();
-                } else {
-                    setToast({ message: 'Senha incorreta! Alteração cancelada.', type: 'error' });
-                }
+                if (code === SECURITY_CODE) saveOrder();
+                else setToast({ message: 'Senha incorreta!', type: 'error' });
             }
         });
     } else {
-        // Se for novo pedido, salva direto
         saveOrder();
     }
   };
 
   const handleDelete = (id: string) => {
-    // 1. Confirmação
     setCustomModal({
         isOpen: true,
         type: 'confirm',
         title: 'Excluir Pedido',
         message: 'Tem certeza que deseja excluir este pedido permanentemente?',
-        inputType: 'text', // CORREÇÃO: Adicionado para satisfazer o TypeScript
+        inputType: 'text',
         onConfirm: () => {
-            // 2. Senha (com delay suave)
             setTimeout(() => {
                 setCustomModal({
                     isOpen: true,
@@ -155,9 +168,13 @@ export default function OrdersPage() {
                     inputType: 'password',
                     onConfirm: async (code) => {
                         if (code === SECURITY_CODE) {
-                            await fetch(`/api/orders?id=${id}`, { method: 'DELETE' });
-                            setToast({ message: 'Pedido excluído!', type: 'warning' });
-                            fetchOrders();
+                            const res = await fetch(`/api/orders?id=${id}`, { method: 'DELETE' });
+                            if (res.ok) {
+                                setToast({ message: 'Pedido excluído!', type: 'warning' });
+                                fetchOrders();
+                            } else {
+                                setToast({ message: 'Erro ao excluir.', type: 'error' });
+                            }
                         } else {
                             setToast({ message: 'Senha incorreta!', type: 'error' });
                         }
@@ -209,7 +226,6 @@ export default function OrdersPage() {
     <div className="min-h-screen relative font-sans text-gray-800 pb-20">
       <Head><title>Encomendas | Glacê</title></Head>
 
-      {/* Componentes de UI */}
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
       
       <CustomModal 
@@ -229,42 +245,22 @@ export default function OrdersPage() {
 
       <div className="relative z-10 max-w-6xl mx-auto py-10 px-4">
         
-        {/* Cabeçalho */}
         <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
            <div>
                <h1 className="text-4xl font-serif font-bold text-glace-wine">Encomendas</h1>
                <p className="text-glace-gold text-sm uppercase tracking-widest font-semibold mt-1">Gestão de Pedidos e Prazos</p>
            </div>
            <div className="flex gap-3">
-             <button 
-                onClick={handleSync} 
-                className="bg-green-600 text-white px-4 py-3 rounded-full font-bold shadow-md hover:bg-green-700 transition text-sm flex items-center gap-2"
-                title="Puxar da Planilha"
-             >
-                🔄 Sync
-             </button>
-             <button 
-                onClick={openNewOrder} 
-                className="bg-glace-wine text-white px-6 py-3 rounded-full font-bold shadow-lg hover:bg-red-900 transition flex items-center gap-2 transform active:scale-95"
-             >
-                <span>+</span> Nova Encomenda
-             </button>
-             <Link href="/" className="bg-white/80 backdrop-blur text-glace-wine px-6 py-3 rounded-full font-bold shadow-sm hover:bg-white transition">
-                ⬅️ Voltar
-             </Link>
+             <button onClick={handleSync} className="bg-green-600 text-white px-4 py-3 rounded-full font-bold shadow-md hover:bg-green-700 transition text-sm flex items-center gap-2">🔄 Sync</button>
+             <button onClick={openNewOrder} className="bg-glace-wine text-white px-6 py-3 rounded-full font-bold shadow-lg hover:bg-red-900 transition flex items-center gap-2 transform active:scale-95"><span>+</span> Nova Encomenda</button>
+             <Link href="/" className="bg-white/80 backdrop-blur text-glace-wine px-6 py-3 rounded-full font-bold shadow-sm hover:bg-white transition">⬅️ Voltar</Link>
            </div>
         </div>
 
-        {/* --- MODAL FORMULÁRIO --- */}
         {showModal && (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
                 <div className="bg-white rounded-3xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto relative animate-scale-up">
-                    <button 
-                        onClick={() => setShowModal(false)} 
-                        className="absolute top-4 right-4 text-gray-400 hover:text-red-500 font-bold text-xl z-10 p-2"
-                    >
-                        ✕
-                    </button>
+                    <button onClick={() => setShowModal(false)} className="absolute top-4 right-4 text-gray-400 hover:text-red-500 font-bold text-xl z-10 p-2">✕</button>
                     
                     <div className="p-6 border-b border-gray-100 bg-gray-50 sticky top-0 z-0">
                         <h2 className="font-serif font-bold text-2xl text-glace-wine flex items-center gap-2">
@@ -275,7 +271,6 @@ export default function OrdersPage() {
                     <div className="p-8">
                         <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-12 gap-6">
                             
-                            {/* Linha 1 */}
                             <div className="md:col-span-3">
                                 <label className="text-xs font-bold text-red-600 uppercase block mb-1">📅 Data Entrega</label>
                                 <input type="datetime-local" className="w-full p-3 rounded-lg border-2 border-red-100 bg-red-50 focus:border-red-300 outline-none font-bold text-gray-700" value={formData.deliveryDate} onChange={e => setFormData({...formData, deliveryDate: e.target.value})} required />
@@ -289,23 +284,18 @@ export default function OrdersPage() {
                                 <input className="w-full p-3 rounded-lg border bg-white/80 focus:ring-2 focus:ring-glace-gold outline-none" placeholder="(00) 00000-0000" value={formData.contact} onChange={e => setFormData({...formData, contact: e.target.value})} />
                             </div>
 
-                            {/* Linha 2 */}
                             <div className="md:col-span-7">
                                 <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Descrição do Pedido</label>
                                 <textarea rows={3} className="w-full p-3 rounded-lg border bg-white/80 focus:ring-2 focus:ring-glace-gold outline-none" placeholder="Bolo, doces, sabor..." value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})} required />
                             </div>
                             <div className="md:col-span-5">
-                                <label className="text-xs font-bold text-glace-wine uppercase block mb-1">Observações (Alergias/Topo)</label>
-                                <textarea rows={3} className="w-full p-3 rounded-lg border border-yellow-200 bg-yellow-50 focus:ring-2 focus:ring-yellow-400 outline-none" placeholder="Ex: Sem lactose, Topo 'Parabéns'..." value={formData.observation} onChange={e => setFormData({...formData, observation: e.target.value})} />
+                                <label className="text-xs font-bold text-glace-wine uppercase block mb-1">Observações</label>
+                                <textarea rows={3} className="w-full p-3 rounded-lg border border-yellow-200 bg-yellow-50 focus:ring-2 focus:ring-yellow-400 outline-none" placeholder="Ex: Sem lactose, Topo..." value={formData.observation} onChange={e => setFormData({...formData, observation: e.target.value})} />
                             </div>
 
-                            {/* Linha 3 */}
                             <div className="md:col-span-3">
                                 <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Valor Total (R$)</label>
-                                <div className="relative">
-                                    <span className="absolute left-3 top-3 text-gray-400">R$</span>
-                                    <input type="number" step="0.01" className="w-full p-3 pl-8 rounded-lg border bg-white/80 font-bold text-lg text-gray-700" value={formData.totalValue} onChange={e => setFormData({...formData, totalValue: Number(e.target.value)})} />
-                                </div>
+                                <input type="number" step="0.01" className="w-full p-3 rounded-lg border bg-white/80 font-bold text-lg text-gray-700" value={formData.totalValue} onChange={e => setFormData({...formData, totalValue: Number(e.target.value)})} />
                             </div>
                             <div className="md:col-span-3">
                                 <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Status Pagamento</label>
@@ -326,31 +316,19 @@ export default function OrdersPage() {
                                 </select>
                             </div>
                             <div className="md:col-span-3">
-                                <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Método Entrega</label>
+                                <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Entrega</label>
                                 <select className="w-full p-3 rounded-lg border bg-white/80 font-bold text-glace-wine cursor-pointer" value={formData.deliveryMethod} onChange={e => setFormData({...formData, deliveryMethod: e.target.value as any})}>
                                     <option value="Retirada">🛍️ Retirada</option>
                                     <option value="Entrega">🛵 Entrega</option>
                                 </select>
                             </div>
 
-                            {/* Linha 4 (Condicional) */}
                             {formData.deliveryMethod === 'Entrega' && (
                                 <div className="md:col-span-12 animate-fade-in-down bg-white/50 p-4 rounded-xl border border-dashed border-glace-wine/30">
-                                    <label className="text-xs font-bold text-glace-wine uppercase block mb-1">📍 Endereço da Entrega</label>
-                                    <input className="w-full p-3 rounded-lg border border-white bg-white shadow-sm" placeholder="Rua, Número, Bairro e Complemento" value={formData.address} onChange={e => setFormData({...formData, address: e.target.value})} />
+                                    <label className="text-xs font-bold text-glace-wine uppercase block mb-1">📍 Endereço</label>
+                                    <input className="w-full p-3 rounded-lg border border-white bg-white shadow-sm" placeholder="Rua, Número, Bairro" value={formData.address} onChange={e => setFormData({...formData, address: e.target.value})} />
                                 </div>
                             )}
-
-                            {/* Data Entrada */}
-                            <div className="md:col-span-12 pt-4 border-t border-gray-100 mt-2">
-                                <p className="text-xs text-gray-400 uppercase font-bold mb-2">Dados do Sistema</p>
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">Data Criação/Entrada</label>
-                                        <input type="datetime-local" className="w-full p-2 rounded border bg-gray-100 text-gray-400 text-sm" value={formData.orderDate} disabled />
-                                    </div>
-                                </div>
-                            </div>
 
                             <div className="md:col-span-12 mt-2">
                                 <button type="submit" className="w-full bg-glace-wine text-white font-bold py-4 rounded-xl shadow-lg hover:bg-red-900 transition uppercase tracking-widest text-sm transform active:scale-[0.99]">
@@ -363,7 +341,6 @@ export default function OrdersPage() {
             </div>
         )}
 
-        {/* --- FILA DE PEDIDOS (KANBAN VISUAL) --- */}
         <div className="mb-16">
             <h3 className="font-serif font-bold text-2xl text-glace-wine mb-6 flex items-center gap-2">
                 ⏳ Fila de Produção <span className="text-sm bg-glace-gold text-white px-2 py-1 rounded-full">{openOrders.length}</span>
@@ -388,11 +365,8 @@ export default function OrdersPage() {
                                     <div>
                                         <h4 className="font-bold text-xl text-gray-800 flex items-center gap-2">
                                             {order.customerName}
-                                            <span className="text-lg opacity-70" title={order.deliveryMethod}>
-                                                {order.deliveryMethod === 'Entrega' ? '🛵' : '🛍️'}
-                                            </span>
+                                            <span className="text-lg opacity-70">{order.deliveryMethod === 'Entrega' ? '🛵' : '🛍️'}</span>
                                         </h4>
-                                        
                                         {order.deliveryMethod === 'Entrega' && order.address && (
                                             <p className="text-xs text-glace-wine font-semibold mt-1 bg-red-50 px-2 py-1 rounded inline-block truncate max-w-[200px]">📍 {order.address}</p>
                                         )}
@@ -405,11 +379,7 @@ export default function OrdersPage() {
 
                                 <div className="bg-gray-50 p-4 rounded-lg mb-4 text-sm text-gray-700 italic border border-gray-100">
                                     {order.description}
-                                    {order.observation && (
-                                        <div className="mt-2 pt-2 border-t border-gray-200 text-yellow-700 font-semibold not-italic flex gap-1">
-                                            <span>⚠️</span> {order.observation}
-                                        </div>
-                                    )}
+                                    {order.observation && <div className="mt-2 pt-2 border-t border-gray-200 text-yellow-700 font-semibold not-italic flex gap-1"><span>⚠️</span> {order.observation}</div>}
                                 </div>
 
                                 <div className="flex flex-wrap gap-2 text-xs font-bold uppercase mb-4">
@@ -431,7 +401,6 @@ export default function OrdersPage() {
             </div>
         </div>
 
-        {/* --- HISTÓRICO DE PEDIDOS (ENTREGUES/CANCELADOS) --- */}
         <div className="opacity-90 mt-20">
             <h3 className="font-serif font-bold text-xl text-gray-500 mb-4 border-b border-gray-300 pb-2">📜 Histórico de Concluídas</h3>
             <div className="bg-white rounded-xl shadow overflow-hidden">
