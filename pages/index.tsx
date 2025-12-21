@@ -1,26 +1,29 @@
 import Head from 'next/head';
 import Link from 'next/link';
-import { useRouter } from 'next/router'; // Importação nova para redirecionar
+import { useRouter } from 'next/router';
 import { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 
 export default function Home() {
-  const router = useRouter(); // Hook de navegação
+  const router = useRouter();
   const [insight, setInsight] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [userName, setUserName] = useState(''); // Para mostrar o nome se quiser
+  // Iniciamos como true apenas para a IA, não para a página toda
+  const [loadingAI, setLoadingAI] = useState(true); 
+  const [userName, setUserName] = useState(''); 
+  const [isFallback, setIsFallback] = useState(false); 
 
   useEffect(() => {
-    // --- 🔒 LÓGICA DE SEGURANÇA ---
+    // 1. VERIFICAÇÃO RÁPIDA (Sem travar a tela)
     const token = localStorage.getItem('token');
     const user = localStorage.getItem('user');
 
+    // Se não tiver token, aí sim redireciona (o Middleware já protegeu antes, isso é dupla segurança)
     if (!token) {
-      // Se não tem token, redireciona imediatamente para o login
       router.push('/login');
       return; 
     }
 
+    // Carrega nome do usuário instantaneamente se estiver no cache
     if (user) {
         try {
             const userData = JSON.parse(user);
@@ -28,27 +31,28 @@ export default function Home() {
         } catch (e) {}
     }
 
-    // Só busca os dados da IA se estiver logado
+    // 2. BUSCA A IA EM SEGUNDO PLANO (O site já abriu)
     fetch('/api/ai/insight')
       .then(res => res.json())
       .then(data => {
-        if (data.success) setInsight(data.insight);
-        setLoading(false);
+        if (data.success) {
+            setInsight(data.insight);
+            setIsFallback(data.isFallback || false); 
+        }
+        setLoadingAI(false); // Só agora libera a caixa da IA
       })
-      .catch(() => setLoading(false));
+      .catch(() => setLoadingAI(false));
   }, [router]);
 
-  // --- FUNÇÃO DE LOGOUT ---
   const handleLogout = () => {
-    localStorage.removeItem('token'); // Apaga a chave
-    localStorage.removeItem('user');  // Apaga os dados
-    router.push('/login'); // Manda pro login
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    document.cookie = "glace_token=; path=/; expires=Thu, 01 Jan 1970 00:00:01 GMT";
+    router.push('/login');
   };
 
-  // Enquanto verifica o login, mostra um carregando simples para não piscar a tela
-  if (loading && !insight) { 
-      return <div className="min-h-screen flex items-center justify-center bg-glace-cream text-glace-wine font-bold">Verificando acesso...</div>;
-  }
+  // --- REMOVIDO: AQUELE BLOCO "IF LOADING RETURN VERIFICANDO..." SAIU DAQUI ---
+  // O site vai renderizar direto agora 👇
 
   return (
     <div className="min-h-screen relative font-sans text-gray-800">
@@ -56,7 +60,7 @@ export default function Home() {
         <title>Glacê | Dashboard Premium</title>
       </Head>
 
-      {/* --- FUNDO (Background Image) --- */}
+      {/* --- FUNDO --- */}
       <div 
         className="fixed inset-0 z-0"
         style={{
@@ -65,15 +69,12 @@ export default function Home() {
             backgroundPosition: 'center',
         }}
       ></div>
-
-      {/* --- SOBREPOSIÇÃO --- */}
       <div className="fixed inset-0 z-0 bg-pattern-overlay"></div>
 
-      {/* --- CONTEÚDO PRINCIPAL --- */}
       <div className="relative z-10 w-full max-w-6xl mx-auto py-12 px-6">
         
         {/* CABEÇALHO */}
-        <header className="flex flex-col md:flex-row items-center justify-between mb-12 gap-6">
+        <header className="flex flex-col md:flex-row items-center justify-between mb-12 gap-6 animate-fade-in-down">
             <div className="flex items-center gap-6">
                 <img 
                     src="/logo-glace.png" 
@@ -96,7 +97,6 @@ export default function Home() {
                         📅 {new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })}
                     </p>
                 </div>
-                {/* BOTÃO DE SAIR AGORA FUNCIONAL */}
                 <button 
                     onClick={handleLogout} 
                     className="text-xs font-bold text-gray-400 hover:text-red-600 transition flex items-center gap-1 cursor-pointer"
@@ -106,26 +106,41 @@ export default function Home() {
             </div>
         </header>
 
-        {/* --- ÁREA DA IA --- */}
+        {/* --- ÁREA DA IA (O Loading fica SÓ AQUI dentro agora) --- */}
         <section className="mb-12">
-            <div className="glass-panel rounded-3xl p-1 shadow-lg border-t-4 border-glace-wine">
+            <div className={`glass-panel rounded-3xl p-1 shadow-lg border-t-4 transition-colors duration-500 ${isFallback ? 'border-orange-400' : 'border-glace-wine'}`}>
                 <div className="bg-white/60 rounded-[20px] p-6 md:p-8">
-                    <div className="flex items-center gap-3 mb-4 border-b border-glace-gold/20 pb-4">
-                        <div className="bg-glace-wine text-white p-2 rounded-lg shadow-md">
-                            <span className="text-xl">✨</span>
+                    
+                    <div className="flex items-center justify-between mb-4 border-b border-glace-gold/20 pb-4">
+                        <div className="flex items-center gap-3">
+                            <div className={`${isFallback ? 'bg-orange-500' : 'bg-glace-wine'} text-white p-2 rounded-lg shadow-md transition-colors`}>
+                                <span className="text-xl">{isFallback ? '🛡️' : '✨'}</span>
+                            </div>
+                            <h2 className="text-2xl font-serif font-bold text-glace-wine">Consultoria Virtual</h2>
                         </div>
-                        <h2 className="text-2xl font-serif font-bold text-glace-wine">Consultoria Virtual</h2>
+                        
+                        {isFallback && !loadingAI && (
+                            <span className="bg-orange-100 text-orange-700 text-xs font-bold px-3 py-1 rounded-full border border-orange-200 animate-pulse hidden md:inline-block">
+                                Modo Segurança (IA Offline)
+                            </span>
+                        )}
                     </div>
                     
-                    {loading ? (
-                        <div className="animate-pulse space-y-3">
+                    {/* AQUI ESTÁ O LOADING LOCALIZADO */}
+                    {loadingAI ? (
+                        <div className="animate-pulse space-y-3 py-4">
+                            <div className="flex items-center gap-2 mb-2">
+                                <div className="w-4 h-4 bg-glace-wine rounded-full animate-bounce"></div>
+                                <div className="w-4 h-4 bg-glace-wine rounded-full animate-bounce delay-100"></div>
+                                <div className="w-4 h-4 bg-glace-wine rounded-full animate-bounce delay-200"></div>
+                                <span className="text-xs text-glace-wine font-bold ml-2">Analisando dados da confeitaria...</span>
+                            </div>
                             <div className="h-2 bg-glace-wine/10 rounded w-1/3"></div>
                             <div className="h-2 bg-glace-wine/10 rounded w-full"></div>
                             <div className="h-2 bg-glace-wine/10 rounded w-3/4"></div>
-                            <p className="text-xs text-glace-gold font-bold mt-2">🤖 Analisando estoque e finanças...</p>
                         </div>
                     ) : (
-                        <div className="text-gray-700 leading-relaxed">
+                        <div className="text-gray-700 leading-relaxed animate-fade-in">
                             {insight ? (
                                 <ReactMarkdown
                                     components={{

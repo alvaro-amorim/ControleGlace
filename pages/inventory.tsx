@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
+import Toast from '../components/Toast'; // Card de Notificação
+import CustomModal from '../components/CustomModal'; // O Novo Modal Bonito
 
 interface Product {
   _id: string;
@@ -14,12 +16,15 @@ interface Product {
   supplier: string;
   observation: string;
   lastMovementDate: string;
+  validity?: string;
 }
 
+// --- SENHA MESTRE ---
 const SECURITY_CODE = '104298';
+
 const CATEGORIES: ('Receita' | 'Embalagens' | 'Limpeza' | 'Diversos')[] = ['Receita', 'Embalagens', 'Limpeza', 'Diversos'];
 
-// Helper para ícones (apenas visual, não altera lógica)
+// Helper para ícones visuais
 const getCategoryIcon = (cat: string) => {
     switch(cat) {
         case 'Receita': return '🧂';
@@ -32,16 +37,30 @@ const getCategoryIcon = (cat: string) => {
 
 export default function InventoryPage() {
   const [loading, setLoading] = useState(true);
+  
+  // Controle de UI (Toast e Modais)
+  const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' | 'warning' | 'info' } | null>(null);
+  const [showModal, setShowModal] = useState(false); // Modal de Cadastro
   const [isEditing, setIsEditing] = useState(false);
   const [minQtyLocked, setMinQtyLocked] = useState(true);
 
-  // --- Estado para controlar quais categorias estão abertas (Acordeão) ---
-  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
+  // Controle de quais categorias estão abertas
+  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set(['Receita'])); 
+
+  // Controle do Modal de Confirmação/Input
+  const [customModal, setCustomModal] = useState({
+    isOpen: false,
+    type: 'confirm' as 'confirm' | 'input',
+    title: '',
+    message: '',
+    inputType: 'text' as 'text' | 'number' | 'password',
+    onConfirm: (val?: string) => {}
+  });
 
   const [allProducts, setAllProducts] = useState<Product[]>([]);
   const [formData, setFormData] = useState<Partial<Product>>({ 
     sku: '', name: '', quantity: 0, unit: 'un', minQuantity: 5,
-    category: 'Receita', costPrice: 0, supplier: '', observation: '',
+    category: 'Receita', costPrice: 0, supplier: '', observation: '', validity: ''
   });
 
   useEffect(() => {
@@ -49,170 +68,263 @@ export default function InventoryPage() {
   }, []);
 
   const fetchProducts = async () => {
-    const res = await fetch('/api/inventory');
-    const data = await res.json();
-    if (data.success) {
-      const sortedProducts = (data.data as Product[]).sort((a, b) => 
-        a.category.localeCompare(b.category) || a.name.localeCompare(b.name)
-      );
-      setAllProducts(sortedProducts);
-    }
+    try {
+        const res = await fetch('/api/inventory');
+        const data = await res.json();
+        if (data.success) {
+          const sortedProducts = (data.data as Product[]).sort((a, b) => 
+            a.category.localeCompare(b.category) || a.name.localeCompare(b.name)
+          );
+          setAllProducts(sortedProducts);
+        }
+    } catch (e) { console.error(e); }
     setLoading(false);
   };
   
-  // --- NOVA FUNÇÃO: Sincronizar com Google Sheets ---
   const handleSync = async () => {
-      // Pergunta de segurança para evitar acidente
-      if (!confirm("⚠️ ATENÇÃO: Isso vai atualizar o App com os dados da PLANILHA.\nSe você apagou algo na planilha, sumirá daqui.\n\nDeseja continuar?")) return;
-      
-      setLoading(true);
-      try {
-          const res = await fetch('/api/inventory/sync', { method: 'POST' });
-          const data = await res.json();
-          if (data.success) {
-              alert(`✅ Sincronizado! ${data.count} itens importados da planilha.`);
-              fetchProducts(); // Recarrega a tela
-          } else {
-              alert("❌ Erro ao sincronizar. Verifique o console.");
+      // Modal de Confirmação para Sync
+      setCustomModal({
+          isOpen: true,
+          type: 'confirm',
+          title: 'Sincronizar com Planilha',
+          message: 'Isso vai atualizar o App com os dados da PLANILHA. Deseja continuar?',
+          inputType: 'text', // Fix TypeScript
+          onConfirm: async () => {
+              setLoading(true);
+              try {
+                  const res = await fetch('/api/inventory/sync', { method: 'POST' });
+                  const data = await res.json();
+                  if (data.success) {
+                      setToast({ message: `Sincronizado! ${data.count} itens importados.`, type: 'success' });
+                      fetchProducts();
+                  } else {
+                      setToast({ message: "Erro ao sincronizar.", type: 'error' });
+                  }
+              } catch (error) {
+                  setToast({ message: "Erro de conexão.", type: 'error' });
+              }
+              setLoading(false);
           }
-      } catch (error) {
-          alert("Erro de conexão com o servidor.");
-      }
-      setLoading(false);
+      });
   };
-  // --------------------------------------------------
 
-  // --- Função para alternar abrir/fechar categoria ---
   const toggleCategory = (category: string) => {
       setExpandedCategories(prev => {
           const next = new Set(prev);
-          if (next.has(category)) {
-              next.delete(category);
-          } else {
-              next.add(category);
-          }
+          if (next.has(category)) next.delete(category);
+          else next.add(category);
           return next;
       });
   };
 
+  // --- PROTEÇÃO 1: Destravar Estoque Mínimo ---
   const handleUnlockMinQty = () => {
-    const code = prompt("🔒 Digite o código para alterar o ESTOQUE MÍNIMO:");
-    if (code === SECURITY_CODE) {
-        setMinQtyLocked(false);
-        alert("🔓 Campo liberado.");
-    } else {
-        alert("❌ Código incorreto.");
-    }
+    setCustomModal({
+        isOpen: true,
+        type: 'input',
+        title: 'Segurança',
+        message: 'Digite a SENHA MESTRE para alterar o ESTOQUE MÍNIMO:',
+        inputType: 'password',
+        onConfirm: (code) => {
+            if (code === SECURITY_CODE) {
+                setMinQtyLocked(false);
+                setToast({ message: "Campo liberado.", type: 'info' });
+            } else {
+                setToast({ message: "Senha incorreta.", type: 'error' });
+            }
+        }
+    });
   };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isEditing) {
-        const code = prompt("🔒 Digite o código para SALVAR ALTERAÇÃO:");
-        if (code !== SECURITY_CODE) return alert("❌ Código incorreto!");
-    }
-
-    const method = isEditing ? 'PUT' : 'POST';
-    const res = await fetch('/api/inventory', {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(formData),
-    });
     
-    if (res.ok) {
-      alert(isEditing ? 'Atualizado!' : 'Cadastrado!');
-      resetForm();
-      fetchProducts();
+    // Função interna de salvamento
+    const saveLogic = async () => {
+        const method = isEditing ? 'PUT' : 'POST';
+        const res = await fetch('/api/inventory', {
+            method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(formData),
+        });
+        
+        if (res.ok) {
+            setToast({ message: isEditing ? 'Item Atualizado!' : 'Item Cadastrado!', type: 'success' });
+            resetForm();
+            setShowModal(false);
+            fetchProducts();
+        } else {
+            setToast({ message: 'Erro ao salvar', type: 'error' });
+        }
+    };
+    
+    // --- PROTEÇÃO 2: Edição ---
+    if (isEditing) {
+        setCustomModal({
+            isOpen: true,
+            type: 'input',
+            title: 'Salvar Alterações',
+            message: 'Digite a SENHA MESTRE para confirmar a edição:',
+            inputType: 'password',
+            onConfirm: (code) => {
+                if (code === SECURITY_CODE) {
+                    saveLogic();
+                } else {
+                    setToast({ message: "Senha incorreta!", type: 'error' });
+                }
+            }
+        });
     } else {
-      alert('Erro ao salvar');
+        saveLogic();
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Excluir item?')) return;
-    const code = prompt("🔒 Digite o código para EXCLUIR:");
-    if (code !== SECURITY_CODE) return alert("❌ Código incorreto!");
-
-    await fetch(`/api/inventory?id=${id}`, { method: 'DELETE' });
-    fetchProducts();
+  const handleDelete = (id: string) => {
+    // 1. Confirmação
+    setCustomModal({
+        isOpen: true,
+        type: 'confirm',
+        title: 'Excluir Item',
+        message: 'Tem certeza que deseja excluir este item permanentemente?',
+        inputType: 'text',
+        onConfirm: () => {
+            // 2. Senha (Chain)
+            setTimeout(() => {
+                setCustomModal({
+                    isOpen: true,
+                    type: 'input',
+                    title: 'Segurança',
+                    message: 'Digite a SENHA MESTRE para excluir:',
+                    inputType: 'password',
+                    onConfirm: async (code) => {
+                        if (code === SECURITY_CODE) {
+                            await fetch(`/api/inventory?id=${id}`, { method: 'DELETE' });
+                            setToast({ message: 'Item excluído.', type: 'warning' });
+                            fetchProducts();
+                        } else {
+                            setToast({ message: "Senha incorreta!", type: 'error' });
+                        }
+                    }
+                });
+            }, 200);
+        }
+    });
   };
 
-  const handleQuickAdd = async (p: Product) => {
-    const code = prompt("🔒 Digite o código para DAR ENTRADA:");
-    if (code !== SECURITY_CODE) return alert("❌ Código incorreto!");
+  // --- PROTEÇÃO 4: Entrada Rápida (Chain: Senha -> Qtd) ---
+  const handleQuickAdd = (p: Product) => {
+    setCustomModal({
+        isOpen: true,
+        type: 'input',
+        title: 'Entrada de Estoque',
+        message: 'Digite a SENHA MESTRE para liberar:',
+        inputType: 'password',
+        onConfirm: (code) => {
+            if (code !== SECURITY_CODE) {
+                setToast({ message: "Senha incorreta!", type: 'error' });
+            } else {
+                // Senha OK -> Pede Quantidade
+                setTimeout(() => {
+                    setCustomModal({
+                        isOpen: true,
+                        type: 'input',
+                        title: `Entrada: ${p.name}`,
+                        message: `Quantos "${p.unit}" chegaram?`,
+                        inputType: 'number',
+                        onConfirm: async (qtdStr) => {
+                            const qtdToAdd = Number(qtdStr);
+                            if (!qtdToAdd || qtdToAdd <= 0) {
+                                return setToast({ message: "Valor inválido", type: 'warning' });
+                            }
 
-    const qtdStr = prompt(`Quantos "${p.unit}" de ${p.name} chegaram (Entrada)?`);
-    if (!qtdStr) return;
-    const qtdToAdd = Number(qtdStr);
+                            const newQuantity = p.quantity + qtdToAdd;
+                            const payload = { ...p, quantity: newQuantity, lastMovementDate: new Date().toISOString() };
 
-    if (isNaN(qtdToAdd) || qtdToAdd <= 0) return alert("Valor inválido");
+                            await fetch('/api/inventory', {
+                                method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+                            });
 
-    const newQuantity = p.quantity + qtdToAdd;
-    const payload = { 
-        ...p, 
-        quantity: newQuantity,
-        lastMovementDate: new Date().toISOString().split('T')[0]
-    };
-
-    await fetch('/api/inventory', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+                            setToast({ message: `Entrada: +${qtdToAdd} ${p.unit}`, type: 'success' });
+                            fetchProducts();
+                        }
+                    });
+                }, 200);
+            }
+        }
     });
-
-    alert(`Entrada registrada! Novo estoque: ${newQuantity} ${p.unit}.`);
-    fetchProducts();
   };
   
-  const handleQuickRemove = async (p: Product) => {
-    const code = prompt("🔒 Digite o código para DAR SAÍDA:");
-    if (code !== SECURITY_CODE) return alert("❌ Código incorreto!");
+  // --- PROTEÇÃO 5: Saída Rápida (Chain: Senha -> Qtd) ---
+  const handleQuickRemove = (p: Product) => {
+    setCustomModal({
+        isOpen: true,
+        type: 'input',
+        title: 'Saída de Estoque',
+        message: 'Digite a SENHA MESTRE para liberar:',
+        inputType: 'password',
+        onConfirm: (code) => {
+            if (code !== SECURITY_CODE) {
+                setToast({ message: "Senha incorreta!", type: 'error' });
+            } else {
+                // Senha OK -> Pede Quantidade
+                setTimeout(() => {
+                    setCustomModal({
+                        isOpen: true,
+                        type: 'input',
+                        title: `Saída: ${p.name}`,
+                        message: `Quantos "${p.unit}" saíram?`,
+                        inputType: 'number',
+                        onConfirm: async (qtdStr) => {
+                            const qtdToRemove = Number(qtdStr);
+                            if (!qtdToRemove || qtdToRemove <= 0) {
+                                return setToast({ message: "Valor inválido", type: 'warning' });
+                            }
+                            if (qtdToRemove > p.quantity) {
+                                return setToast({ message: `Erro: Estoque insuficiente (${p.quantity}).`, type: 'error' });
+                            }
 
-    const qtdStr = prompt(`Quantos "${p.unit}" de ${p.name} foram USADOS/SAÍRAM?`);
-    if (!qtdStr) return;
-    const qtdToRemove = Number(qtdStr);
+                            const newQuantity = p.quantity - qtdToRemove;
+                            const payload = { ...p, quantity: newQuantity, lastMovementDate: new Date().toISOString() };
 
-    if (isNaN(qtdToRemove) || qtdToRemove <= 0) return alert("Valor inválido");
-    if (qtdToRemove > p.quantity) return alert(`Atenção: A saída (${qtdToRemove}) é maior que o estoque atual (${p.quantity}).`);
+                            await fetch('/api/inventory', {
+                                method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+                            });
 
-    const newQuantity = p.quantity - qtdToRemove;
-    const payload = { 
-        ...p, 
-        quantity: newQuantity,
-        lastMovementDate: new Date().toISOString().split('T')[0]
-    };
-
-    await fetch('/api/inventory', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+                            setToast({ message: `Saída: -${qtdToRemove} ${p.unit}`, type: 'success' });
+                            fetchProducts();
+                        }
+                    });
+                }, 200);
+            }
+        }
     });
-
-    alert(`Saída registrada! Estoque restante: ${newQuantity} ${p.unit}.`);
-    fetchProducts();
   };
 
   const startEdit = (p: Product) => {
-    setFormData(p); 
+    const formattedValidity = p.validity ? new Date(p.validity).toISOString().split('T')[0] : '';
+    setFormData({ ...p, validity: formattedValidity }); 
+    
     setIsEditing(true);
     setMinQtyLocked(true);
-    
-    // Quando editar, garante que a categoria abre para o usuário ver
-    setExpandedCategories(prev => new Set(prev).add(p.category));
-    
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    setShowModal(true);
+  };
+  
+  const openNewItem = () => {
+      resetForm();
+      setIsEditing(false);
+      setShowModal(true);
   };
 
   const resetForm = () => {
     setFormData({ 
         sku: '', name: '', quantity: 0, unit: 'un', minQuantity: 5,
-        category: 'Receita', costPrice: 0, supplier: '', observation: '', 
+        category: 'Receita', costPrice: 0, supplier: '', observation: '', validity: ''
     });
     setIsEditing(false);
     setMinQtyLocked(true);
   };
 
-  // --- Componentes Internos ---
+  // --- COMPONENTES DA TABELA ---
 
   const ProductRow = ({ p }: { p: Product }) => {
     const isCritical = p.quantity <= p.minQuantity;
@@ -222,7 +334,10 @@ export default function InventoryPage() {
             <td className="px-4 py-3 font-medium text-gray-500 text-xs">{p.sku}</td>
             <td className="px-4 py-3">
                 <div className="font-bold text-gray-800 font-serif text-lg">{p.name}</div>
-                <div className="text-xs text-gray-500 uppercase tracking-wide">{p.supplier}</div>
+                <div className="text-xs text-gray-500 uppercase tracking-wide flex gap-2">
+                    <span>{p.supplier}</span>
+                    {p.validity && <span className="text-blue-500 font-bold">• Val: {new Date(p.validity).toLocaleDateString()}</span>}
+                </div>
                 {p.observation && <div className="text-xs text-glace-gold italic mt-1">Obs: {p.observation}</div>}
             </td>
             <td className="px-4 py-3 text-center">
@@ -233,34 +348,20 @@ export default function InventoryPage() {
             </td>
             <td className="px-4 py-3 text-sm text-gray-600">
                 <div className="text-xs text-gray-400 font-semibold">
-                    Último Movimento: {p.lastMovementDate ? new Date(p.lastMovementDate).toLocaleDateString('pt-BR', {timeZone:'UTC'}) : '-'}
+                    Último Mov: {p.lastMovementDate ? new Date(p.lastMovementDate).toLocaleDateString('pt-BR') : '-'}
                 </div>
                 <div>Custo: R$ {p.costPrice?.toFixed(2)}</div>
             </td>
             <td className="px-4 py-3 text-right space-x-2 flex items-center justify-end">
-                <button 
-                    onClick={() => handleQuickRemove(p)} 
-                    className="bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1 rounded-lg text-sm font-bold border border-red-200 transition"
-                    title="Dar Saída/Baixa no Estoque"
-                    disabled={p.quantity === 0}
-                >
-                    ➖ Baixa
-                </button>
-                <button 
-                    onClick={() => handleQuickAdd(p)} 
-                    className="bg-blue-50 hover:bg-blue-100 text-blue-600 px-3 py-1 rounded-lg text-sm font-bold border border-blue-200 transition"
-                    title="Chegou Mercadoria (Entrada)"
-                >
-                    ➕ Entrada
-                </button>
-                <button onClick={() => startEdit(p)} className="text-gray-400 hover:text-glace-wine text-lg p-1 transition">✏️</button>
-                <button onClick={() => handleDelete(p._id as string)} className="text-gray-400 hover:text-red-500 text-lg p-1 transition">🗑️</button>
+                <button onClick={() => handleQuickRemove(p)} className="bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1 rounded-lg text-sm font-bold border border-red-200 transition" title="Dar Saída">➖</button>
+                <button onClick={() => handleQuickAdd(p)} className="bg-blue-50 hover:bg-blue-100 text-blue-600 px-3 py-1 rounded-lg text-sm font-bold border border-blue-200 transition" title="Dar Entrada">➕</button>
+                <button onClick={() => startEdit(p)} className="text-gray-400 hover:text-glace-wine text-lg p-1 transition" title="Editar">✏️</button>
+                <button onClick={() => handleDelete(p._id as string)} className="text-gray-400 hover:text-red-500 text-lg p-1 transition" title="Excluir">🗑️</button>
             </td>
         </tr>
     );
   };
 
-  // Componente de Tabela Expansível
   const CategoryTable = ({ category, products, isOpen, onToggle }: { category: string, products: Product[], isOpen: boolean, onToggle: () => void }) => {
     const criticalItems = products.filter(p => p.quantity <= p.minQuantity);
     const normalItems = products.filter(p => p.quantity > p.minQuantity);
@@ -268,7 +369,6 @@ export default function InventoryPage() {
 
     return (
         <div className="glass-panel rounded-2xl shadow-lg overflow-hidden border-t-4 border-glace-gold mb-6 transition-all duration-300">
-            {/* CABEÇALHO CLICÁVEL (Botão) */}
             <button 
                 onClick={onToggle}
                 className={`w-full flex justify-between items-center px-6 py-4 border-b text-left transition-colors ${category === 'Receita' ? 'bg-red-50/50 hover:bg-red-100/50' : 'bg-glace-cream hover:bg-white/80'}`}
@@ -279,7 +379,6 @@ export default function InventoryPage() {
                         <h3 className="font-serif font-bold text-xl text-glace-wine">
                             {category === 'Receita' ? '👩‍🍳 Ingredientes (Receita)' : `📦 Categoria: ${category}`}
                         </h3>
-                        {/* Resumo quando fechado */}
                         {!isOpen && (
                             <p className="text-xs text-gray-500 font-semibold mt-1">
                                 {totalCount} itens {criticalItems.length > 0 && <span className="text-red-600">({criticalItems.length} críticos)</span>}
@@ -287,14 +386,11 @@ export default function InventoryPage() {
                         )}
                     </div>
                 </div>
-
-                {/* Ícone de Seta (Gira quando abre) */}
                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className={`w-6 h-6 text-glace-gold transition-transform duration-300 ${isOpen ? 'rotate-180' : ''}`}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
                 </svg>
             </button>
             
-            {/* CORPO DA TABELA (Abre apenas se isOpen === true) */}
             {isOpen && (
                 <div className="overflow-x-auto animate-fade-in-down">
                     <table className="min-w-full text-sm">
@@ -325,120 +421,140 @@ export default function InventoryPage() {
   };
 
   return (
-    <div className="min-h-screen relative font-sans text-gray-800">
+    <div className="min-h-screen relative font-sans text-gray-800 pb-20">
       <Head><title>Estoque | Glacê</title></Head>
+
+      {/* Componentes de UI */}
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+      
+      <CustomModal 
+        isOpen={customModal.isOpen}
+        type={customModal.type}
+        title={customModal.title}
+        message={customModal.message}
+        inputType={customModal.inputType}
+        onConfirm={customModal.onConfirm}
+        onClose={() => setCustomModal(prev => ({ ...prev, isOpen: false }))}
+        confirmText="Confirmar"
+        cancelText="Cancelar"
+      />
 
       <div className="fixed inset-0 z-0" style={{ backgroundImage: "url('/bg-confeitaria.png')", backgroundSize: 'cover', backgroundPosition: 'center' }}></div>
       <div className="fixed inset-0 z-0 bg-pattern-overlay"></div>
 
       <div className="relative z-10 max-w-6xl mx-auto py-10 px-4">
         
-        {/* CABEÇALHO ATUALIZADO COM BOTÃO SYNC */}
+        {/* CABEÇALHO */}
         <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
            <div>
                <h1 className="text-4xl font-serif font-bold text-glace-wine">Estoque</h1>
-               <p className="text-glace-gold text-sm uppercase tracking-widest font-semibold">Controle de Insumos & Materiais</p>
+               <p className="text-glace-gold text-sm uppercase tracking-widest font-semibold mt-1">Controle de Insumos & Materiais</p>
            </div>
            
            <div className="flex gap-3">
-             {/* BOTÃO NOVO DE SYNC */}
              <button 
                 onClick={handleSync}
                 className="bg-green-600 text-white px-5 py-3 rounded-full font-bold shadow-sm hover:bg-green-700 transition flex items-center gap-2 text-sm"
-                title="Puxar dados da Planilha Google"
              >
-                🔄 Sincronizar Planilha
+                🔄 Sync
              </button>
-
-             <Link href="/" className="bg-glace-wine text-white px-6 py-3 rounded-full font-bold shadow-lg hover:bg-red-900 transition flex items-center">
-                Voltar
+             <button 
+                onClick={openNewItem} 
+                className="bg-glace-wine text-white px-6 py-3 rounded-full font-bold shadow-lg hover:bg-red-900 transition flex items-center gap-2 transform active:scale-95"
+             >
+                <span>+</span> Novo Item
+             </button>
+             <Link href="/" className="bg-white/80 backdrop-blur text-glace-wine px-6 py-3 rounded-full font-bold shadow-sm hover:bg-white transition">
+                ⬅️ Voltar
              </Link>
            </div>
         </div>
 
-        {/* --- FORMULÁRIO (Mantido idêntico) --- */}
-        <div className={`glass-panel p-6 rounded-2xl shadow-xl mb-10 border-t-4 ${isEditing ? 'border-yellow-500 bg-yellow-50/50' : 'border-glace-wine'}`}>
-          <div className="flex justify-between mb-6">
-            <h2 className="font-serif font-bold text-2xl text-gray-800">{isEditing ? '✏️ Editar Item' : '➕ Novo Item'}</h2>
-            {isEditing && <button onClick={resetForm} className="text-red-500 text-sm font-bold hover:underline">CANCELAR EDIÇÃO</button>}
-          </div>
+        {/* --- MODAL (JANELA FLUTUANTE) --- */}
+        {showModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in">
+                <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto relative animate-scale-up">
+                    <button onClick={() => setShowModal(false)} className="absolute top-4 right-4 text-gray-400 hover:text-red-500 font-bold text-xl p-2 z-10">✕</button>
+                    
+                    <div className="p-6 border-b border-gray-100 bg-gray-50 sticky top-0 z-0">
+                        <h2 className="font-serif font-bold text-2xl text-glace-wine">
+                            {isEditing ? '✏️ Editar Item' : '➕ Novo Item de Estoque'}
+                        </h2>
+                    </div>
 
-          <form onSubmit={handleSave} className="grid grid-cols-1 md:grid-cols-6 gap-6">
-            <div className="md:col-span-1">
-              <label className="text-xs font-bold text-glace-gold uppercase mb-1 block">SKU / Cód</label>
-              <input className="w-full border border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-glace-gold outline-none bg-white/80" placeholder="CHO-01" value={formData.sku} onChange={e => setFormData({...formData, sku: e.target.value})} required disabled={isEditing} />
-            </div>
-            <div className="md:col-span-2">
-              <label className="text-xs font-bold text-glace-gold uppercase mb-1 block">Nome do Produto</label>
-              <input className="w-full border border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-glace-gold outline-none bg-white/80" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required />
-            </div>
-            <div className="md:col-span-1">
-              <label className="text-xs font-bold text-glace-gold uppercase mb-1 block">Categoria</label>
-              <select className="w-full border border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-glace-gold outline-none bg-white/80" 
-                value={formData.category} 
-                onChange={e => setFormData({...formData, category: e.target.value as any})}
-              >
-                {CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
-              </select>
-            </div>
-            <div className="md:col-span-1">
-              <label className="text-xs font-bold text-glace-gold uppercase mb-1 block">Qtd Atual</label>
-              <input type="number" className="w-full border border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-glace-gold outline-none bg-white/80" value={formData.quantity} onChange={e => setFormData({...formData, quantity: Number(e.target.value)})} />
-            </div>
-            <div className="md:col-span-1">
-              <label className="text-xs font-bold text-glace-gold uppercase mb-1 block">Unidade</label>
-              <select className="w-full border border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-glace-gold outline-none bg-white/80" value={formData.unit} onChange={e => setFormData({...formData, unit: e.target.value})}>
-                <option value="un">Un</option>
-                <option value="kg">Kg</option>
-                <option value="g">g</option>
-                <option value="l">L</option>
-                <option value="cx">Cx</option>
-              </select>
-            </div>
+                    <div className="p-8">
+                        <form onSubmit={handleSave} className="grid grid-cols-1 md:grid-cols-6 gap-6">
+                            <div className="md:col-span-2">
+                                <label className="text-xs font-bold text-glace-gold uppercase mb-1 block">SKU / Cód</label>
+                                <input className="w-full border border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-glace-gold outline-none bg-white/80" placeholder="CHO-01" value={formData.sku} onChange={e => setFormData({...formData, sku: e.target.value})} required disabled={isEditing} />
+                            </div>
+                            <div className="md:col-span-4">
+                                <label className="text-xs font-bold text-glace-gold uppercase mb-1 block">Nome do Produto</label>
+                                <input className="w-full border border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-glace-gold outline-none bg-white/80" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} required />
+                            </div>
+                            
+                            <div className="md:col-span-2">
+                                <label className="text-xs font-bold text-glace-gold uppercase mb-1 block">Categoria</label>
+                                <select className="w-full border border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-glace-gold outline-none bg-white/80" value={formData.category} onChange={e => setFormData({...formData, category: e.target.value as any})}>
+                                    {CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                                </select>
+                            </div>
+                            <div className="md:col-span-2">
+                                <label className="text-xs font-bold text-glace-gold uppercase mb-1 block">Qtd Atual</label>
+                                <input type="number" className="w-full border border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-glace-gold outline-none bg-white/80" value={formData.quantity} onChange={e => setFormData({...formData, quantity: Number(e.target.value)})} />
+                            </div>
+                            <div className="md:col-span-2">
+                                <label className="text-xs font-bold text-glace-gold uppercase mb-1 block">Unidade</label>
+                                <select className="w-full border border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-glace-gold outline-none bg-white/80" value={formData.unit} onChange={e => setFormData({...formData, unit: e.target.value})}>
+                                    <option value="un">Un</option><option value="kg">Kg</option><option value="g">g</option><option value="l">L</option><option value="cx">Cx</option><option value="pct">Pct</option>
+                                </select>
+                            </div>
 
-            {/* Linha 2 */}
-            <div className="md:col-span-1">
-              <label className="text-xs font-bold text-gray-400 uppercase mb-1 block">Custo (R$)</label>
-              <input type="number" className="w-full border border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-glace-gold outline-none bg-white/80" value={formData.costPrice} onChange={e => setFormData({...formData, costPrice: Number(e.target.value)})} />
-            </div>
-            <div className="md:col-span-2">
-              <label className="text-xs font-bold text-gray-400 uppercase mb-1 block">Fornecedor</label>
-              <input className="w-full border border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-glace-gold outline-none bg-white/80" placeholder="Ex: Atacadão" value={formData.supplier} onChange={e => setFormData({...formData, supplier: e.target.value})} />
-            </div>
-             
-             {/* TRAVA DE SEGURANÇA */}
-             <div className="md:col-span-1">
-              <label className="text-xs font-bold text-gray-400 uppercase mb-1 flex items-center gap-2">
-                  Estoque Mín 
-                  {minQtyLocked ? (
-                      <button type="button" onClick={handleUnlockMinQty} className="text-gray-400 hover:text-glace-wine" title="Clique para Destravar">🔒</button>
-                  ) : (
-                      <span className="text-green-500" title="Destravado">🔓</span>
-                  )}
-              </label>
-              <input 
-                type="number" 
-                className={`w-full border border-gray-300 rounded-lg p-3 outline-none ${minQtyLocked ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-white focus:ring-2 focus:ring-glace-gold'}`} 
-                value={formData.minQuantity} 
-                onChange={e => setFormData({...formData, minQuantity: Number(e.target.value)})}
-                disabled={minQtyLocked} 
-              />
-            </div>
+                            <div className="md:col-span-2">
+                                <label className="text-xs font-bold text-gray-400 uppercase mb-1 block">Custo (R$)</label>
+                                <input type="number" step="0.01" className="w-full border border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-glace-gold outline-none bg-white/80" value={formData.costPrice} onChange={e => setFormData({...formData, costPrice: Number(e.target.value)})} />
+                            </div>
+                            <div className="md:col-span-4">
+                                <label className="text-xs font-bold text-gray-400 uppercase mb-1 block">Fornecedor</label>
+                                <input className="w-full border border-gray-300 rounded-lg p-3 focus:ring-2 focus:ring-glace-gold outline-none bg-white/80" placeholder="Ex: Atacadão" value={formData.supplier} onChange={e => setFormData({...formData, supplier: e.target.value})} />
+                            </div>
 
-            <div className="md:col-span-2 flex items-end">
-               <button type="submit" className={`w-full text-white font-bold py-3 px-4 rounded-xl shadow-md transition transform active:scale-95 ${isEditing ? 'bg-yellow-600 hover:bg-yellow-700' : 'bg-green-600 hover:bg-green-700'}`}>
-                 {isEditing ? '💾 Salvar Alterações' : '✨ Adicionar ao Estoque'}
-               </button>
-            </div>
-            
-            <div className="md:col-span-6">
-                <input className="w-full border-b border-gray-200 p-2 bg-transparent text-sm focus:border-glace-wine outline-none placeholder-gray-400" placeholder="Observações adicionais (marca, local de armazenamento...)" value={formData.observation} onChange={e => setFormData({...formData, observation: e.target.value})} />
-            </div>
-          </form>
-        </div>
+                            {/* ESTOQUE MÍNIMO COM TRAVA */}
+                            <div className="md:col-span-3">
+                                <label className="text-xs font-bold text-gray-400 uppercase mb-1 flex items-center gap-2">
+                                    Estoque Mín 
+                                    {minQtyLocked ? (
+                                        <button type="button" onClick={handleUnlockMinQty} className="text-gray-400 hover:text-glace-wine" title="Clique para Destravar">🔒</button>
+                                    ) : (
+                                        <span className="text-green-500" title="Destravado">🔓</span>
+                                    )}
+                                </label>
+                                <input type="number" className={`w-full border border-gray-300 rounded-lg p-3 outline-none ${minQtyLocked ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-white focus:ring-2 focus:ring-glace-gold'}`} value={formData.minQuantity} onChange={e => setFormData({...formData, minQuantity: Number(e.target.value)})} disabled={minQtyLocked} />
+                            </div>
 
-        {/* --- CARDS TIPO ACORDEÃO (Mantido idêntico) --- */}
-        <div className="space-y-4">
+                            {/* NOVA DATA DE VALIDADE */}
+                            <div className="md:col-span-3">
+                                <label className="text-xs font-bold text-blue-500 uppercase mb-1 block">Data de Validade</label>
+                                <input type="date" className="w-full border border-blue-200 bg-blue-50 rounded-lg p-3 focus:ring-2 focus:ring-blue-300 outline-none" value={formData.validity} onChange={e => setFormData({...formData, validity: e.target.value})} />
+                            </div>
+                            
+                            <div className="md:col-span-6">
+                                <input className="w-full border-b border-gray-200 p-2 bg-transparent text-sm focus:border-glace-wine outline-none placeholder-gray-400" placeholder="Observações adicionais..." value={formData.observation} onChange={e => setFormData({...formData, observation: e.target.value})} />
+                            </div>
+
+                            <div className="md:col-span-6 mt-2">
+                                <button type="submit" className={`w-full text-white font-bold py-4 rounded-xl shadow-lg transition transform active:scale-95 ${isEditing ? 'bg-yellow-600 hover:bg-yellow-700' : 'bg-glace-wine hover:bg-red-900'}`}>
+                                    {isEditing ? '💾 Salvar Alterações' : '✨ Adicionar ao Estoque'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        )}
+
+        {/* --- LISTAGEM DE CATEGORIAS (ACORDEÃO) --- */}
+        <div className="space-y-4 mb-20">
             {CATEGORIES.map(category => (
                 <CategoryTable 
                     key={category} 
